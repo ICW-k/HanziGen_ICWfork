@@ -73,15 +73,6 @@ def train_ldm(
         device=device,
     )
 
-    # ==== Simplified resume: load model weights only ====
-    if resume_from:
-        try:
-            ckpt = torch.load(resume_from, map_location=device, weights_only=True)
-        except TypeError:
-            ckpt = torch.load(resume_from, map_location=device)
-        ldm.load_state_dict(ckpt, strict=True)
-        print(f"[Resume] Loaded LDM weights from: {resume_from}")
-
     optimizer = optim.Adam(
         ldm.parameters(),
         lr=training_config.learning_rate,
@@ -99,12 +90,15 @@ def train_ldm(
         model=ldm,
     )
 
+    # resume_from 由 fit 内部恢复完整状态（model+optimizer+scheduler+epoch），
+    # 且 resume 时不会再重复加载预训练 VQ-VAE
     ldm.fit(
         loader=loader,
         optimizer=optimizer,
         scheduler=scheduler,
         scaler=scaler,
         training_config=training_config,
+        resume_from=resume_from,
     )
 
 

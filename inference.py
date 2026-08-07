@@ -56,9 +56,11 @@ def inference(
     ckpt = torch.load(
         ldm_inference_config.pretrained_ldm_path,
         map_location="cpu",
-        weights_only=True,
     )
-    ldm.load_state_dict(ckpt, strict=False)
+    # 兼容两种 checkpoint 格式：
+    #   新格式（训练中保存的完整状态 dict，含 "model" key）与旧格式（纯 state_dict）
+    state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+    ldm.load_state_dict(state_dict, strict=False)
 
     print_model_params(
         model=ldm,
