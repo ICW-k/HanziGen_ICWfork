@@ -126,6 +126,64 @@ class VQVAE(nn.Module):
         return metrics
 
     # ===== Training and Validation =====
+    def _save_checkpoint(
+        self,
+        checkpoint_path: Path,
+        optimizer: Optimizer,
+        scheduler: LRScheduler,
+        scaler: torch.cuda.amp.GradScaler,
+        epoch: int,
+        min_val_loss: float,
+    ) -> None:
+        """
+        Save a full training state (model + optimizer + scheduler + epoch).
+
+        The dict holds a "model" key with the pure model state_dict so that inference /
+        weight-loading code can read it compatibly.
+        """
+        ckpt = {
+            "model": self.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "epoch": epoch,
+            "min_val_loss": min_val_loss,
+        }
+        if scaler is not None and scaler.is_enabled():
+            ckpt["scaler"] = scaler.state_dict()
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(ckpt, checkpoint_path)
+
+    def _restore_checkpoint(
+        self,
+        checkpoint_path: Path,
+        optimizer: Optimizer,
+        scheduler: LRScheduler,
+        scaler: torch.cuda.amp.GradScaler,
+    ) -> tuple[int, float]:
+        """
+        Restore a full training state from a checkpoint. Returns (start_epoch, min_val_loss).
+
+        Supports both the new full-state format (dict with "model" key) and the legacy
+        pure state_dict format (weights-only resume, epoch restarts from 0).
+        """
+        try:
+            ckpt = torch.load(checkpoint_path, map_location=self.device)
+        except TypeError:
+            ckpt = torch.load(checkpoint_path, map_location=self.device, weights_only=True)
+
+        if isinstance(ckpt, dict) and "model" in ckpt:
+            self.load_state_dict(ckpt["model"], strict=True)
+            optimizer.load_state_dict(ckpt["optimizer"])
+            scheduler.load_state_dict(ckpt["scheduler"])
+            if scaler is not None and scaler.is_enabled() and "scaler" in ckpt:
+                scaler.load_state_dict(ckpt["scaler"])
+            return int(ckpt.get("epoch", 0)) + 1, float(
+                ckpt.get("min_val_loss", float("inf"))
+            )
+        # 旧格式：纯 state_dict，只能恢复权重，epoch 从头开始
+        self.load_state_dict(ckpt, strict=True)
+        return 0, float("inf")
+
     def fit(
         self,
         loader: Loader,
@@ -133,9 +191,14 @@ class VQVAE(nn.Module):
         scheduler: LRScheduler,
         scaler: torch.cuda.amp.GradScaler,
         training_config: VQVAETrainingConfig,
+        resume_from: str | None = None,
     ) -> None:
         """
         Train the VQ-VAE model and save the best model checkpoint.
+
+        When ``resume_from`` points to a full-state checkpoint, the optimizer / scheduler /
+        epoch / best-loss are restored so training continues exactly where it stopped
+        (true epoch-level resume).
         """
         log_dir = Path(training_config.tensorboard_log_dir) / datetime.now().strftime(
             "%Y%m%d-%H%M%S"
@@ -147,9 +210,27 @@ class VQVAE(nn.Module):
             model_save_path = Path(training_config.model_save_path)
             model_save_path.parent.mkdir(parents=True, exist_ok=True)
 
+            start_epoch = 0
             min_val_loss = float("inf")
 
-            for epoch in range(training_config.num_epochs):
+            if resume_from:
+                if not Path(resume_from).exists():
+                    raise FileNotFoundError(
+                        f"[ERROR] No checkpoint to resume from: {resume_from}"
+                    )
+                start_epoch, min_val_loss = self._restore_checkpoint(
+                    checkpoint_path=Path(resume_from),
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                )
+                print(
+                    f"[RESUME] 从 epoch {start_epoch} 继续训练（最佳 val loss: {min_val_loss:.6f}）"
+                )
+
+            ckpt_save_interval = getattr(training_config, "ckpt_save_interval", 0)
+
+            for epoch in range(start_epoch, training_config.num_epochs):
 
                 # Train and validate for one epoch
                 train_metrics, val_metrics = self._run_epoch(
@@ -171,11 +252,29 @@ class VQVAE(nn.Module):
                     learning_rate=current_lr,
                 )
 
-                # Save the best model checkpoint
+                # Save the best model checkpoint (full training state)
                 if val_metrics["total"] < min_val_loss:
                     min_val_loss = val_metrics["total"]
-                    torch.save(self.state_dict(), model_save_path)
+                    self._save_checkpoint(
+                        checkpoint_path=model_save_path,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        scaler=scaler,
+                        epoch=epoch,
+                        min_val_loss=min_val_loss,
+                    )
                     print(f"✅ Best model saved (val loss: {min_val_loss:.6f})")
+                elif ckpt_save_interval > 0 and epoch % ckpt_save_interval == 0:
+                    # 周期保存完整状态，确保即使非最佳 epoch 也能精确续训
+                    self._save_checkpoint(
+                        checkpoint_path=model_save_path,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        scaler=scaler,
+                        epoch=epoch,
+                        min_val_loss=min_val_loss,
+                    )
+                    print(f"[CKPT] 周期性检查点已保存 (epoch {epoch})")
 
                 # Print Metrics
                 self._print_epoch_status(

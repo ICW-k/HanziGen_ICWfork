@@ -181,6 +181,61 @@ class LDM(nn.Module):
         return self.vqvae_decoder(latents)
 
     # ===== Training and Validation =====
+    def _save_checkpoint(
+        self,
+        checkpoint_path: Path,
+        optimizer: Optimizer,
+        scheduler: LRScheduler,
+        scaler: torch.cuda.amp.GradScaler,
+        epoch: int,
+        min_lpips_score: float,
+    ) -> None:
+        """
+        Save a full training state (model + optimizer + scheduler + epoch).
+        """
+        ckpt = {
+            "model": self.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "epoch": epoch,
+            "min_lpips_score": min_lpips_score,
+        }
+        if scaler is not None and scaler.is_enabled():
+            ckpt["scaler"] = scaler.state_dict()
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(ckpt, checkpoint_path)
+
+    def _restore_checkpoint(
+        self,
+        checkpoint_path: Path,
+        optimizer: Optimizer,
+        scheduler: LRScheduler,
+        scaler: torch.cuda.amp.GradScaler,
+    ) -> tuple[int, float]:
+        """
+        Restore a full training state from a checkpoint. Returns (start_epoch, min_lpips_score).
+
+        Supports both the new full-state format (dict with "model" key) and the legacy
+        pure state_dict format (weights-only resume, epoch restarts from 0).
+        """
+        try:
+            ckpt = torch.load(checkpoint_path, map_location=self.device)
+        except TypeError:
+            ckpt = torch.load(checkpoint_path, map_location=self.device, weights_only=True)
+
+        if isinstance(ckpt, dict) and "model" in ckpt:
+            self.load_state_dict(ckpt["model"], strict=True)
+            optimizer.load_state_dict(ckpt["optimizer"])
+            scheduler.load_state_dict(ckpt["scheduler"])
+            if scaler is not None and scaler.is_enabled() and "scaler" in ckpt:
+                scaler.load_state_dict(ckpt["scaler"])
+            return int(ckpt.get("epoch", 0)) + 1, float(
+                ckpt.get("min_lpips_score", float("inf"))
+            )
+        # 旧格式：纯 state_dict，只能恢复权重，epoch 从头开始
+        self.load_state_dict(ckpt, strict=True)
+        return 0, float("inf")
+
     def fit(
         self,
         loader: Loader,
@@ -188,11 +243,22 @@ class LDM(nn.Module):
         scheduler: LRScheduler,
         scaler: torch.cuda.amp.GradScaler,
         training_config: LDMTrainingConfig,
+        resume_from: str | None = None,
     ) -> None:
         """
         Train the LDM and save the best model checkpoint.
+
+        When ``resume_from`` points to a full-state checkpoint, the optimizer / scheduler /
+        epoch / best-LPIPS are restored so training continues exactly where it stopped
+        (true epoch-level resume).
         """
-        self._load_pretrained_vqvae(training_config.pretrained_vqvae_path)
+        if not resume_from:
+            self._load_pretrained_vqvae(training_config.pretrained_vqvae_path)
+        else:
+            # resume 时不会重复加载预训练 VQ-VAE，但需确保其被冻结（不被训练）
+            self.vqvae.eval()
+            for param in self.vqvae.parameters():
+                param.requires_grad = False
 
         log_dir = Path(training_config.tensorboard_log_dir) / datetime.now().strftime(
             "%Y%m%d-%H%M%S"
@@ -211,9 +277,27 @@ class LDM(nn.Module):
                 sample_root=training_config.sample_root,
             )
 
+            start_epoch = 0
             min_lpips_score = float("inf")
 
-            for epoch in range(training_config.num_epochs):
+            if resume_from:
+                if not Path(resume_from).exists():
+                    raise FileNotFoundError(
+                        f"[ERROR] No checkpoint to resume from: {resume_from}"
+                    )
+                start_epoch, min_lpips_score = self._restore_checkpoint(
+                    checkpoint_path=Path(resume_from),
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                )
+                print(
+                    f"[RESUME] 从 epoch {start_epoch} 继续训练（最佳 LPIPS: {min_lpips_score:.6f}）"
+                )
+
+            ckpt_save_interval = getattr(training_config, "ckpt_save_interval", 0)
+
+            for epoch in range(start_epoch, training_config.num_epochs):
 
                 # Train and validate for one epoch
                 train_loss, val_loss = self._run_epoch(
@@ -257,8 +341,25 @@ class LDM(nn.Module):
                 ):
 
                     min_lpips_score = scores["lpips"]
-                    torch.save(self.state_dict(), model_save_path)
+                    self._save_checkpoint(
+                        checkpoint_path=model_save_path,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        scaler=scaler,
+                        epoch=epoch,
+                        min_lpips_score=min_lpips_score,
+                    )
                     print(f"✅ Best model saved. (LPIPS score: {min_lpips_score:.6f})")
+                elif ckpt_save_interval > 0 and epoch % ckpt_save_interval == 0:
+                    self._save_checkpoint(
+                        checkpoint_path=model_save_path,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        scaler=scaler,
+                        epoch=epoch,
+                        min_lpips_score=min_lpips_score,
+                    )
+                    print(f"[CKPT] 周期性检查点已保存 (epoch {epoch})")
 
                 # Print Metrics
                 self._print_epoch_status(
