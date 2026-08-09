@@ -84,6 +84,11 @@ class LDM(nn.Module):
         # Define loss function
         self.loss_fn = nn.MSELoss()
 
+        # VQ-VAE 编码结果缓存（img_name -> (tgt_latent, ref_latent)）。
+        # VQ-VAE 冻结后 latent 是确定性的，缓存可避免每个 batch 重复编码，显著提速。
+        # latent 尺寸很小（2x64x64），全量驻留 CPU 内存仅数百 MB，12.7GB 系统 RAM 无压力。
+        self._latent_cache: dict[str, tuple[Tensor, Tensor]] = {}
+
         # Move model to device
         self.to(self.device)
 
@@ -128,6 +133,54 @@ class LDM(nn.Module):
 
         return noise_pred
 
+    @torch.no_grad()
+    def _get_batch_latents(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
+        """
+        Fetch VQ-VAE latents for a batch, encoding only the images not yet cached.
+
+        Since the VQ-VAE is frozen, its encoding is deterministic, so the result is
+        cached once (in fp32, on CPU) and reused for all subsequent epochs. This
+        eliminates the repeated VQ-VAE encoder/quantizer forward pass per batch, the
+        dominant training cost, without any loss of training accuracy.
+        """
+        tgt_imgs = batch["tgt_img"]
+        ref_imgs = batch["ref_img"]
+        img_names = batch["img_name"]
+        device = self.device
+
+        tgt_latents: list[Tensor] = []
+        ref_latents: list[Tensor] = []
+        pending_tgt: list[Tensor] = []
+        pending_ref: list[Tensor] = []
+        pending_names: list[str] = []
+
+        for name, tgt, ref in zip(img_names, tgt_imgs, ref_imgs):
+            if name in self._latent_cache:
+                tgt_lat, ref_lat = self._latent_cache[name]
+                tgt_latents.append(tgt_lat)
+                ref_latents.append(ref_lat)
+            else:
+                pending_names.append(name)
+                pending_tgt.append(tgt)
+                pending_ref.append(ref)
+
+        if pending_names:
+            pt = torch.stack(pending_tgt).to(device)
+            pr = torch.stack(pending_ref).to(device)
+            pt_lat = self._encode_to_latent(pt)
+            pr_lat = self._encode_to_latent(pr)
+            pt_lat_cpu = pt_lat.detach().cpu()
+            pr_lat_cpu = pr_lat.detach().cpu()
+            for i, name in enumerate(pending_names):
+                self._latent_cache[name] = (pt_lat_cpu[i], pr_lat_cpu[i])
+            tgt_latents.extend(pt_lat_cpu)
+            ref_latents.extend(pr_lat_cpu)
+
+        return (
+            torch.stack(tgt_latents).to(device),
+            torch.stack(ref_latents).to(device),
+        )
+
     def _process_batch(
         self,
         batch: dict[str, Tensor],
@@ -138,19 +191,16 @@ class LDM(nn.Module):
         """
         Process a single batch of data.
         """
-        tgt_imgs = batch["tgt_img"].to(self.device)
-        ref_imgs = batch["ref_img"].to(self.device)
+        tgt_latents, ref_latents = self._get_batch_latents(batch)
 
-        batch_size = tgt_imgs.shape[0]
+        batch_size = tgt_latents.shape[0]
         t = self.scheduler.sample_timesteps(batch_size)
 
         with torch.autocast(
             device_type=self.device.type,
             enabled=scaler.is_enabled() if scaler else False,
         ):
-            tgt_latents = self._encode_to_latent(tgt_imgs)
             x_t, noise = self.scheduler.add_noise(tgt_latents, t)
-            ref_latents = self._encode_to_latent(ref_imgs)
 
             noise_pred = self(x_t, ref_latents, t)
             loss = self.loss_fn(noise_pred, noise)
