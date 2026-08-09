@@ -35,20 +35,30 @@ class TrainValLoader:
             random_seed=dataset_config.random_seed,
         )
 
+        num_workers = dataset_config.num_workers
+        pin_memory = device.type == "cuda"
+        # persistent_workers + prefetch 显著减少每个 epoch 重建 worker 进程的开销，
+        # 且能提前预取下一批数据，避免 GPU 因等待数据而空闲。
+        persistent_workers = num_workers > 0
+
         train_loader = DataLoader(
             dataset=train_dataset,
             batch_size=dataset_config.batch_size,
             shuffle=True,
-            num_workers=dataset_config.num_workers,
-            pin_memory=True if device.type == "cuda" else False,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
+            prefetch_factor=4 if num_workers > 0 else None,
         )
 
         val_loader = DataLoader(
             dataset=val_dataset,
             batch_size=dataset_config.batch_size,
             shuffle=False,
-            num_workers=dataset_config.num_workers,
-            pin_memory=True if device.type == "cuda" else False,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
+            prefetch_factor=4 if num_workers > 0 else None,
         )
 
         return cls(train=train_loader, val=val_loader)
