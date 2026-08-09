@@ -12,7 +12,7 @@ LEARNING_RATE=5e-4                     # 初始学习率，实际学习率会根
 NUM_EPOCHS=250                         # 训练轮数
 SAMPLE_STEPS=50                        # 样例图生成时的采样步数（用于可视化/评估）
 IMG_SAVE_INTERVAL=10                   # 可视化图片保存间隔（单位：epoch）
-LPIPS_EVAL_INTERVAL=10                 # LPIPS 评估间隔（单位：epoch）
+LPIPS_EVAL_INTERVAL=20                 # LPIPS 评估间隔（单位：epoch）
 EVAL_BATCH_SIZE=2                      # 评估批大小
 DEVICE="cuda"                          # 训练设备：cuda / cpu / mps
                                        #（cuda就是使用Nvidia GPU   mps就是使用Apple Silicon GPU）
