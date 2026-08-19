@@ -10,7 +10,7 @@ RANDOM_SEED=7777                       # 随机种子（保证可复现）
 BATCH_SIZE=44                          # 每批次训练的样本数量（T4 15GB 下 ~14.3GB；若 OOM 降至 40）
 NUM_WORKERS=8                          # DataLoader 并行加载进程数（避免 GPU 等待数据）
 LEARNING_RATE=1e-3                     # 初始学习率，实际学习率会根据余弦退火策略动态调整
-NUM_EPOCHS=100                         # 训练轮数
+NUM_EPOCHS=600                         # 训练轮数
 DEVICE="cuda"                          # 训练设备：cuda / cpu / mps 
                                        #（cuda就是使用Nvidia GPU   mps就是使用Apple Silicon GPU）
 

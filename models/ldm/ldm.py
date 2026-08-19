@@ -111,6 +111,10 @@ class LDM(nn.Module):
             map_location=self.device,
             weights_only=True,
         )
+        # VQ-VAE checkpoint 可能是完整训练状态（{"model": ..., "optimizer": ...}）
+        # 也可能是裸 state_dict；两者都兼容
+        if isinstance(ckpt, dict) and "model" in ckpt:
+            ckpt = ckpt["model"]
         self.vqvae.load_state_dict(ckpt)
         self.vqvae.eval()
 
