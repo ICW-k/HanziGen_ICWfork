@@ -1,8 +1,10 @@
 import argparse
+import gc
 
 from configs import FontProcessingConfig
 from utils.argparse.argparse_utils import update_config_from_args
 from utils.font import FontCoverageAnalyzer
+from utils.font.font_utils import get_font_paths
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,13 +40,17 @@ def analyze_reference_fonts(
     reference_fonts_dir: str,
     font_processing_config: FontProcessingConfig,
 ) -> None:
-    """ """
-    analyzers = FontCoverageAnalyzer.from_reference_fonts(
-        reference_fonts_dir=reference_fonts_dir,
-        font_processing_config=font_processing_config,
-    )
-    for analyzer in analyzers:
+    """逐个分析参考字体，分析完立即释放内存，防止小内存实例 OOM 崩溃"""
+    font_paths = get_font_paths(reference_fonts_dir)
+    for font_path in font_paths:
+        analyzer = FontCoverageAnalyzer(
+            font_path=font_path,
+            font_processing_config=font_processing_config,
+        )
         analyzer.analyze_coverage()
+        # 显式释放大对象（TTFont/glyph_set/cmap）并触发 GC
+        del analyzer
+        gc.collect()
 
 
 def main() -> None:

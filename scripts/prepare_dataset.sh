@@ -1,11 +1,11 @@
 #!/bin/bash
 
-TARGET_FONT_PATH="fonts/myfont.ttf"
+TARGET_FONT_PATH="fonts/ChangguMingtiBold.otf"
 REFERENCE_FONTS_DIR="fonts/jigmo/"
 IMG_WIDTH=512
 IMG_HEIGHT=512
 SAMPLE_RATIO=1.0
-NUM_WORKERS=8                          # 字形渲染并行线程数（建议设为 CPU 核数，8-16 核实例可充分压榨）
+NUM_WORKERS=4  # 字形渲染并行线程数（Cell 1 会按内存自适应调整；小内存实例请保持 ≤4，防止 OOM）
 
 
 TARGET_FONT_NAME=$(basename "$TARGET_FONT_PATH" | sed -E 's/\.(ttf|otf)$//')
