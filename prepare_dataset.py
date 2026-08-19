@@ -19,6 +19,11 @@ def parse_args() -> argparse.Namespace:
         "--img_size", type=int, nargs=2, help="Image size (width height)"
     )
     parser.add_argument("--sample_ratio", type=float, help="Sampling ratio (0-1)")
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        help="Number of worker threads for glyph rendering (match CPU cores)",
+    )
 
     return parser.parse_args()
 

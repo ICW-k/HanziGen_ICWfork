@@ -5,6 +5,7 @@ REFERENCE_FONTS_DIR="fonts/jigmo/"
 IMG_WIDTH=512
 IMG_HEIGHT=512
 SAMPLE_RATIO=1.0
+NUM_WORKERS=8                          # 字形渲染并行线程数（建议设为 CPU 核数，8-16 核实例可充分压榨）
 
 
 TARGET_FONT_NAME=$(basename "$TARGET_FONT_PATH" | sed -E 's/\.(ttf|otf)$//')
@@ -16,4 +17,5 @@ python prepare_dataset.py \
     --reference_fonts_dir "$REFERENCE_FONTS_DIR" \
     --source_charset_path "$SOURCE_CHARSET_PATH" \
     --img_size "$IMG_WIDTH" "$IMG_HEIGHT" \
-    --sample_ratio "$SAMPLE_RATIO"
+    --sample_ratio "$SAMPLE_RATIO" \
+    --num_workers "$NUM_WORKERS"

@@ -56,6 +56,39 @@
 
 ---
 
+## 📂 專案結構速覽
+
+> 新對話可只看本節即可掌握檔案歸屬，細節再回查下方對應章節。
+
+- `train_vqvae.py` / `train_ldm.py`：兩階段訓練入口（VQ-VAE → LDM）。
+- `inference.py`：用訓練好的 LDM 生成缺字圖像。
+- `prepare_dataset.py`：渲染目標/參考字型為字形圖像（`data/`）。
+- `extract_charset.py`：劃分訓練/驗證字集（`charsets/splits/`）。
+- `analyze_font.py`：分析字型在 jf7000 / Unihan 的覆蓋率（`charsets/*_coverage/`）。
+- `compute_metrics.py`：計算 PSNR/SSIM/LPIPS/FID。
+- `convert_to_svg.py`：點陣圖像轉 SVG 向量字形。
+- `models/`：VQ-VAE、LDM、UNet 等模型定義。
+- `datasets/`：字形圖像的 DataLoader 與資料集類別。
+- `utils/`：指標（LPIDS/PSNR…）、硬體選擇、影像生成等工具。
+- `configs/`：訓練/模型/字型處理的參數配置類。
+- `scripts/`：對應上述各步驟的 `.sh` 啟動腳本（參數集中於此）。
+- `fonts/`：放置目標字型與 `jigmo/` 參考字型（需自行建立）。
+- `charsets/`：字集與劃分結果；`data/`：渲染圖像；`checkpoints/`：模型權重；`runs/`：TensorBoard；`samples_*` / `svgs_*`：輸出。
+- `hanzigen_cloudstudio.ipynb`：騰訊雲一鍵流程（含硬體切換指示）；`hanzigen_gbk_inference.ipynb`：輕量補字推理入口。
+
+---
+
+## 🧭 操作邏輯速覽（一條線）
+
+1. 建環境 → 2. 放字型到 `fonts/` → 3. 分析覆蓋率（`analyze_font`）
+→ 4. 渲染資料集（`prepare_dataset`）→ 5. 劃分訓練/驗證（`extract_charset`）
+→ 6. 訓練 VQ-VAE（`train_vqvae`）→ 7. 訓練 LDM（`train_ldm`）
+→ 8. 計算指標（`compute_metrics`）→ 9. 生成缺字（`inference`）→ 10. 轉 SVG（`convert_to_svg`）。
+
+每步對應一個 `scripts/*.sh`（參數集中於腳本內），雲端流程見 `hanzigen_cloudstudio.ipynb`。
+
+---
+
 ## 🚀 使用說明
 
 ### 1. 建置環境 ⚙️
@@ -823,6 +856,12 @@ svgs_[your_target_font]/
 > [!NOTE]
 > 本專案的程式碼採用 Apache License 2.0 授權條款；但其中所引用的部分資源（如 jf7000 字集）可能受其原始授權條款（如 CC BY-SA 4.0）約束，使用時請遵循其原始規範。
   
+---
+
+## 🗂️ 緩存與非必要檔案
+
+- `vgg16-397923af.pth`：VGG16 ImageNet 預訓練權重（約 553MB）。本專案程式碼**不會直接 `torch.load` 此檔**；LPIPS 指標使用的是 `lpips` 套件（`net="vgg"`），會自動從網路下載權重至 `~/.cache/torch/hub/checkpoints/`。此檔已不留在倉庫根目錄，需時請從備份取得（見 `hanzigen_cloudstudio.ipynb` 的 **Cell 4-前置操作** 中的下載連結），手動上傳到雲空間後由該 Cell 自動搬到快取目錄，讓 Cell 4（訓練 LDM）與 Cell 5（指標）省去下載時間。⚠️ 不要把它當成 `checkpoints/vqvae_{FONT}.pth`（那是本專案的 VQ-VAE 模型權重），兩者用途完全不同。
+
 ---
 
 ## 📜 授權條款
