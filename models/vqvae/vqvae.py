@@ -229,14 +229,20 @@ class VQVAE(nn.Module):
                 )
 
             ckpt_save_interval = getattr(training_config, "ckpt_save_interval", 0)
+            val_every = max(1, getattr(training_config, "val_every", 5))
 
             for epoch in range(start_epoch, training_config.num_epochs):
 
-                # Train and validate for one epoch
+                # 每 val_every 个 epoch 跑一次全量验证；最后一个 epoch 强制验证，
+                # 保证最佳模型始终在完整评估后落盘
+                do_validation = (epoch % val_every == 0) or (
+                    epoch == training_config.num_epochs - 1
+                )
                 train_metrics, val_metrics = self._run_epoch(
                     loader=loader,
                     optimizer=optimizer,
                     scaler=scaler,
+                    do_validation=do_validation,
                 )
 
                 # Update learning rate
@@ -253,7 +259,7 @@ class VQVAE(nn.Module):
                 )
 
                 # Save the best model checkpoint (full training state)
-                if val_metrics["total"] < min_val_loss:
+                if val_metrics is not None and val_metrics["total"] < min_val_loss:
                     min_val_loss = val_metrics["total"]
                     self._save_checkpoint(
                         checkpoint_path=model_save_path,
@@ -290,15 +296,19 @@ class VQVAE(nn.Module):
         loader: Loader,
         optimizer: Optimizer,
         scaler: torch.cuda.amp.GradScaler,
-    ) -> tuple[dict[str, float], dict[str, float]]:
+        do_validation: bool = True,
+    ) -> tuple[dict[str, float], dict[str, float] | None]:
         """
-        Run one epoch of training and validation.
+        Run one epoch of training, and validation when ``do_validation`` is set.
         """
         train_loader = loader.loader.train
-        val_loader = loader.loader.val
 
         train_losses = self._train_one_epoch(train_loader, optimizer, scaler)
-        val_losses = self._validate_one_epoch(val_loader)
+        if do_validation:
+            val_loader = loader.loader.val
+            val_losses = self._validate_one_epoch(val_loader)
+        else:
+            val_losses = None
 
         return train_losses, val_losses
 
@@ -406,8 +416,9 @@ class VQVAE(nn.Module):
         for metric_type, metric_value in train_metrics.items():
             writer.add_scalar(f"train/{metric_type}", metric_value, epoch)
 
-        for metric_type, metric_value in val_metrics.items():
-            writer.add_scalar(f"val/{metric_type}", metric_value, epoch)
+        if val_metrics is not None:
+            for metric_type, metric_value in val_metrics.items():
+                writer.add_scalar(f"val/{metric_type}", metric_value, epoch)
 
         writer.add_scalar("LR", learning_rate, epoch)
 
@@ -430,10 +441,13 @@ class VQVAE(nn.Module):
         table.add_column("Validation", justify="right", style="green")
 
         for metric_type in train_metrics.keys():
+            val_value = (
+                "-" if val_metrics is None else f"{val_metrics[metric_type]:.4f}"
+            )
             table.add_row(
                 metric_type.replace("_", " ").capitalize(),
                 f"{train_metrics[metric_type]:.4f}",
-                f"{val_metrics[metric_type]:.4f}",
+                val_value,
             )
 
         table.add_row("Learning Rate", f"{learning_rate:.6f}", "-")

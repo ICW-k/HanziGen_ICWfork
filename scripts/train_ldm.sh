@@ -14,6 +14,7 @@ NUM_EPOCHS=1000                         # 训练轮数
 SAMPLE_STEPS=50                        # 样例图生成时的采样步数（用于可视化/评估）
 IMG_SAVE_INTERVAL=10                   # 可视化图片保存间隔（单位：epoch）
 LPIPS_EVAL_INTERVAL=10                 # LPIPS 评估间隔（单位：epoch）
+VAL_EVERY=5                            # 验证频率：每隔多少 epoch 跑一次全量验证（1=每epoch）
 EVAL_BATCH_SIZE=2                      # 评估批大小
 DEVICE="cuda"                          # 训练设备：cuda / cpu / mps
                                        #（cuda就是使用Nvidia GPU   mps就是使用Apple Silicon GPU）
@@ -49,6 +50,7 @@ python train_ldm.py \
     --num_workers "$NUM_WORKERS" \
     --learning_rate "$LEARNING_RATE" \
     --num_epochs "$NUM_EPOCHS" \
+    --val_every "$VAL_EVERY" \
     --pretrained_vqvae_path "$PRETRAINED_VQVAE_PATH" \
     --model_save_path "$MODEL_SAVE_PATH" \
     --sample_root "$SAMPLE_ROOT" \

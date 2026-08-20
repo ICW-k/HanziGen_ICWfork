@@ -46,6 +46,8 @@ class LDMTrainingConfig:
 
     # 周期保存完整训练状态（模型+optimizer+scheduler+epoch）的间隔，0 表示不周期保存
     ckpt_save_interval: int = 5
+    # 每隔多少 epoch 跑一次全量验证（1 表示每 epoch 都验证）
+    val_every: int = 5
     # 恢复训练起始 epoch（由 resume_from 时自动从检查点读取，通常无需手动设置）
     resume_epoch: int = 0
 

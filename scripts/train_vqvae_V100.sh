@@ -13,6 +13,7 @@ BATCH_SIZE=88                          # V100 32G 上限附近（~29GB；若 OOM
 NUM_WORKERS=6                          # 8 核 CPU：上限 6（留 2 核给主进程/系统，勿设 8）
 LEARNING_RATE=1e-3                     # 初始学习率，实际学习率会根据余弦退火策略动态调整
 NUM_EPOCHS=600                         # 训练轮数
+VAL_EVERY=5                            # 验证频率：每隔多少 epoch 跑一次全量验证（1=每epoch）
 DEVICE="cuda"                          # 训练设备：cuda / cpu / mps 
                                        #（cuda就是使用Nvidia GPU   mps就是使用Apple Silicon GPU）
 
@@ -44,6 +45,7 @@ python train_vqvae.py \
     --num_workers "$NUM_WORKERS" \
     --learning_rate "$LEARNING_RATE" \
     --num_epochs "$NUM_EPOCHS" \
+    --val_every "$VAL_EVERY" \
     --model_save_path "$MODEL_SAVE_PATH" \
     --device "$DEVICE" \
     "${ARGS[@]}"

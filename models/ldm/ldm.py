@@ -350,14 +350,19 @@ class LDM(nn.Module):
                 )
 
             ckpt_save_interval = getattr(training_config, "ckpt_save_interval", 0)
+            val_every = max(1, getattr(training_config, "val_every", 5))
 
             for epoch in range(start_epoch, training_config.num_epochs):
 
-                # Train and validate for one epoch
+                # 每 val_every 个 epoch 跑一次全量验证；最后一个 epoch 强制验证
+                do_validation = (epoch % val_every == 0) or (
+                    epoch == training_config.num_epochs - 1
+                )
                 train_loss, val_loss = self._run_epoch(
                     loader=loader,
                     optimizer=optimizer,
                     scaler=scaler,
+                    do_validation=do_validation,
                 )
 
                 # Update learning rate
@@ -429,15 +434,19 @@ class LDM(nn.Module):
         loader: Loader,
         optimizer: Optimizer,
         scaler: torch.cuda.amp.GradScaler,
-    ) -> tuple[float, float]:
+        do_validation: bool = True,
+    ) -> tuple[float, float | None]:
         """
-        Run one epoch of training and validation.
+        Run one epoch of training, and validation when ``do_validation`` is set.
         """
         train_loader = loader.loader.train
-        val_loader = loader.loader.val
 
         train_loss = self._train_one_epoch(train_loader, optimizer, scaler)
-        val_loss = self._validate_one_epoch(val_loader)
+        if do_validation:
+            val_loader = loader.loader.val
+            val_loss = self._validate_one_epoch(val_loader)
+        else:
+            val_loss = None
 
         return train_loss, val_loss
 
@@ -847,7 +856,8 @@ class LDM(nn.Module):
         Log training and validation metrics to TensorBoard.
         """
         writer.add_scalar("Loss/train", train_loss, epoch)
-        writer.add_scalar("Loss/val", val_loss, epoch)
+        if val_loss is not None:
+            writer.add_scalar("Loss/val", val_loss, epoch)
         writer.add_scalar("LR", learning_rate, epoch)
 
     def _log_evaluation_metrics(
@@ -880,7 +890,8 @@ class LDM(nn.Module):
         table.add_column("Train Loss", justify="right", style="magenta")
         table.add_column("Val Loss", justify="right", style="green")
 
-        table.add_row("Total", f"{train_loss:.6f}", f"{val_loss:.6f}")
+        val_loss_str = "-" if val_loss is None else f"{val_loss:.6f}"
+        table.add_row("Total", f"{train_loss:.6f}", val_loss_str)
         table.add_row("Learning Rate", f"{learning_rate:.6f}", "-")
 
         console.print(table)

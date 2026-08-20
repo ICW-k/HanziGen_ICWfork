@@ -11,6 +11,7 @@ BATCH_SIZE=44                          # 每批次训练的样本数量（T4 15G
 NUM_WORKERS=8                          # DataLoader 并行加载进程数（避免 GPU 等待数据）
 LEARNING_RATE=1e-3                     # 初始学习率，实际学习率会根据余弦退火策略动态调整
 NUM_EPOCHS=600                         # 训练轮数
+VAL_EVERY=5                            # 验证频率：每隔多少 epoch 跑一次全量验证（1=每epoch）
 DEVICE="cuda"                          # 训练设备：cuda / cpu / mps 
                                        #（cuda就是使用Nvidia GPU   mps就是使用Apple Silicon GPU）
 
@@ -42,6 +43,7 @@ python train_vqvae.py \
     --num_workers "$NUM_WORKERS" \
     --learning_rate "$LEARNING_RATE" \
     --num_epochs "$NUM_EPOCHS" \
+    --val_every "$VAL_EVERY" \
     --model_save_path "$MODEL_SAVE_PATH" \
     --device "$DEVICE" \
     "${ARGS[@]}"

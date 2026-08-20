@@ -23,6 +23,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num_workers", type=int, help="Number of DataLoader workers")
     parser.add_argument("--learning_rate", type=float, help="Learning rate")
     parser.add_argument("--num_epochs", type=int, help="Number of epochs")
+    parser.add_argument(
+        "--val_every",
+        type=int,
+        help="Validate once every N epochs (default 5; 1 = every epoch)",
+    )
     parser.add_argument("--model_save_path", type=str, help="Model save path")
     parser.add_argument("--device", type=str, help="Training device (mps, cpu, cuda)")
     parser.add_argument(
