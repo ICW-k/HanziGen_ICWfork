@@ -1,0 +1,4 @@
+1、https://kamichikoichi.github.io/jigmo/
+在此下载Jigmo压缩包，可减少在云平台上重新下载的耗费的时间
+2、你所需要补全的字体
+3、（若换平台进行训练，则进行checkpoints的下载）
