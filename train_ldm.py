@@ -14,7 +14,11 @@ from configs import (
 from datasets.loader import Loader
 from models import LDM
 from utils.argparse.argparse_utils import update_config_from_args
-from utils.hardware.hardware_utils import print_model_params, select_device
+from utils.hardware.hardware_utils import (
+    apply_auto_tuning,
+    print_model_params,
+    select_device,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,8 +28,16 @@ def parse_args() -> argparse.Namespace:
         "--split_ratios", type=float, nargs=2, help="Train/val split ratios"
     )
     parser.add_argument("--random_seed", type=int, help="Random seed")
-    parser.add_argument("--batch_size", type=int, help="Batch size")
-    parser.add_argument("--num_workers", type=int, help="Number of DataLoader workers")
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        help="Batch size（不传则按 latent 空间自动推算，默认 128）",
+    )
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        help="Number of DataLoader workers（不传则按 CPU 核数自动推算）",
+    )
     parser.add_argument("--learning_rate", type=float, help="Learning rate")
     parser.add_argument("--num_epochs", type=int, help="Number of epochs")
     parser.add_argument(
@@ -45,6 +57,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--eval_batch_size", type=int, help="Batch size for evaluation")
     parser.add_argument("--device", type=str, help="Training device (mps, cpu, cuda)")
+    parser.add_argument(
+        "--preset",
+        type=str,
+        default="conservative",
+        choices=["aggressive", "conservative"],
+        help="硬件自适应档位：aggressive=云端压榨（留 1 核+高预取）；"
+        "conservative=本地稳妥（留 2 核+保守预取）",
+    )
     parser.add_argument(
         "--resume_from",
         type=str,
@@ -128,6 +148,36 @@ def main() -> None:
         args=args,
     )
     device = select_device(args.device)
+
+    # 硬件自适应：batch_size / num_workers 未显式传入时按真实硬件实时推算，
+    # 消除"多配置专用脚本"，并保证 GPU 与 CPU 数据供给同步（避免线程饥饿 / GPU 空转）。
+    tuning = apply_auto_tuning(
+        dataset_config,
+        device,
+        mode="ldm",
+        auto_batch=args.batch_size is None,
+        auto_workers=args.num_workers is None,
+        preset=args.preset,
+    )
+    if tuning["gpu_available"]:
+        print(
+            f"[硬件] GPU: {tuning['gpu_name']} ({tuning['vram_gb']:.1f} GB) | "
+            f"CPU 核数: {tuning['cpu_cores']} | 档位: {tuning['preset']}"
+        )
+    else:
+        print(
+            f"[硬件] 未检测到 CUDA GPU（{tuning['cpu_cores']} 核） | "
+            f"档位: {tuning['preset']}"
+        )
+    print(
+        f"[自适应] batch_size={tuning['batch_size']} | "
+        f"num_workers={tuning['num_workers']} | "
+        f"prefetch_factor={tuning['prefetch_factor']}"
+    )
+    # eval_batch_size 未显式传入时按显存自适应（>=24G → 16，否则 → 8）
+    if args.eval_batch_size is None:
+        training_config.eval_batch_size = tuning["eval_batch_size"]
+        print(f"[自适应] eval_batch_size={training_config.eval_batch_size}")
 
     train_ldm(
         dataset_config=dataset_config,

@@ -1,4 +1,10 @@
 #!/bin/bash
+# ============================================================
+# 云平台训练脚本（aggressive 档）：尽可能压榨实例性能
+# 适配：Cloud Studio / Colab / ModelScope 等云端 GPU 实例
+# 特点：workers 留 1 核、prefetch 拉满、显存预留比例更高（0.95）
+# 本地机请改用 scripts/train_ldm_local.sh（conservative 档）
+# ============================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
@@ -7,15 +13,19 @@ TARGET_FONT_PATH="fonts/myfont.ttf"   # 目标字体路径（用于数据集构�
 TRAIN_SPLIT_RATIO=0.8                  # 训练集占比（与验证占比相加应为 1.0）
 VAL_SPLIT_RATIO=0.2                    # 验证集占比
 RANDOM_SEED=9999                       # 随机种子（保证可复现）
-BATCH_SIZE=64                          # 每批训练的样本数量（latent 空间 64x64 极小，T4 15GB 无压力；可试 96）
-NUM_WORKERS=8                          # DataLoader 并行加载进程数（避免 GPU 等待数据）
+BATCH_SIZE=auto                        # 批次样本数：auto=latent 空间默认 128（显存不敏感）
+                                       #   手动指定：填入整数，跳过自动推算
+NUM_WORKERS=auto                       # DataLoader 并行加载进程数：auto=按 CPU 核数推算（云端留 1 核）
+                                       #   手动指定：填入整数，跳过自动推算
+PRESET=aggressive                      # 硬件档位：aggressive=云端压榨 / conservative=本地稳妥
 LEARNING_RATE=5e-4                     # 初始学习率，实际学习率会根据余弦退火策略动态调整
 NUM_EPOCHS=1000                         # 训练轮数
 SAMPLE_STEPS=50                        # 样例图生成时的采样步数（用于可视化/评估）
 IMG_SAVE_INTERVAL=10                   # 可视化图片保存间隔（单位：epoch）
 LPIPS_EVAL_INTERVAL=10                 # LPIPS 评估间隔（单位：epoch）
 VAL_EVERY=5                            # 验证频率：每隔多少 epoch 跑一次全量验证（1=每epoch）
-EVAL_BATCH_SIZE=2                      # 评估批大小
+EVAL_BATCH_SIZE=auto                   # 评估批大小：auto=按显存自适应（>=24G→16，否则→8）
+                                       #   手动指定：填入整数，跳过自动推算
 DEVICE="cuda"                          # 训练设备：cuda / cpu / mps
                                        #（cuda就是使用Nvidia GPU   mps就是使用Apple Silicon GPU）
 
@@ -41,13 +51,22 @@ fi
 if [ "$ENABLE_MIXED_PRECISION" -eq 1 ]; then
   ARGS+=(--mixed_precision)
 fi
+# BATCH_SIZE / NUM_WORKERS / EVAL_BATCH_SIZE 为 auto 时按硬件实时推算；仅显式数字时才传入覆盖
+if [ "$BATCH_SIZE" != "auto" ]; then
+  ARGS+=(--batch_size "$BATCH_SIZE")
+fi
+if [ "$NUM_WORKERS" != "auto" ]; then
+  ARGS+=(--num_workers "$NUM_WORKERS")
+fi
+if [ "$EVAL_BATCH_SIZE" != "auto" ]; then
+  ARGS+=(--eval_batch_size "$EVAL_BATCH_SIZE")
+fi
+ARGS+=(--preset "$PRESET")
 
 # =============== 启动训练 ===============
 python train_ldm.py \
     --split_ratios "$TRAIN_SPLIT_RATIO" "$VAL_SPLIT_RATIO" \
     --random_seed "$RANDOM_SEED" \
-    --batch_size "$BATCH_SIZE" \
-    --num_workers "$NUM_WORKERS" \
     --learning_rate "$LEARNING_RATE" \
     --num_epochs "$NUM_EPOCHS" \
     --val_every "$VAL_EVERY" \

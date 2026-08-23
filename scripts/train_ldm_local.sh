@@ -1,23 +1,31 @@
 #!/bin/bash
+# ============================================================
+# 本地机训练脚本（conservative 档）：稳定优先，适合个人电脑后台挂机
+# 特点：workers 留 2 核、prefetch 保守、显存预留比例更稳（0.85），
+#       避免影响日常使用、防止 OOM / 系统卡顿。
+# 云端 GPU 实例请改用 scripts/train_ldm.sh（aggressive 档）
+# ============================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-# =============== 基础参数（A10 档：24GB 显存 / 20 核 CPU） ===============
-# 适配实例：NVIDIA A10 (24GB / 20核 / 116GB 内存)
-# 依据：LDM 在 64x64 潜在空间训练，显存不是瓶颈；batch=128 配 20 核数据供给
+# =============== 基础参数（按需修改） ===============
 TARGET_FONT_PATH="fonts/myfont.ttf"   # 目标字体路径（用于数据集构建/分析）
 TRAIN_SPLIT_RATIO=0.8                  # 训练集占比（与验证占比相加应为 1.0）
 VAL_SPLIT_RATIO=0.2                    # 验证集占比
 RANDOM_SEED=9999                       # 随机种子（保证可复现）
-BATCH_SIZE=128                         # A10 档：20 核数据供给充足，可支撑大 batch
-NUM_WORKERS=14                         # 20 核 CPU：上限 16，取 14（留 6 核给主进程/系统/预取）
+BATCH_SIZE=auto                        # 批次样本数：auto=latent 空间默认 128（显存不敏感）
+                                       #   手动指定：填入整数，跳过自动推算
+NUM_WORKERS=auto                       # DataLoader 并行加载进程数：auto=按 CPU 核数推算（本地留 2 核）
+                                       #   手动指定：填入整数，跳过自动推算
+PRESET=conservative                    # 硬件档位：aggressive=云端压榨 / conservative=本地稳妥
 LEARNING_RATE=5e-4                     # 初始学习率，实际学习率会根据余弦退火策略动态调整
 NUM_EPOCHS=1000                         # 训练轮数
 SAMPLE_STEPS=50                        # 样例图生成时的采样步数（用于可视化/评估）
 IMG_SAVE_INTERVAL=10                   # 可视化图片保存间隔（单位：epoch）
 LPIPS_EVAL_INTERVAL=10                 # LPIPS 评估间隔（单位：epoch）
 VAL_EVERY=5                            # 验证频率：每隔多少 epoch 跑一次全量验证（1=每epoch）
-EVAL_BATCH_SIZE=16                     # 评估批大小（A10 24G 充裕）
+EVAL_BATCH_SIZE=auto                   # 评估批大小：auto=按显存自适应（>=24G→16，否则→8）
+                                       #   手动指定：填入整数，跳过自动推算
 DEVICE="cuda"                          # 训练设备：cuda / cpu / mps
                                        #（cuda就是使用Nvidia GPU   mps就是使用Apple Silicon GPU）
 
@@ -43,13 +51,22 @@ fi
 if [ "$ENABLE_MIXED_PRECISION" -eq 1 ]; then
   ARGS+=(--mixed_precision)
 fi
+# BATCH_SIZE / NUM_WORKERS / EVAL_BATCH_SIZE 为 auto 时按硬件实时推算；仅显式数字时才传入覆盖
+if [ "$BATCH_SIZE" != "auto" ]; then
+  ARGS+=(--batch_size "$BATCH_SIZE")
+fi
+if [ "$NUM_WORKERS" != "auto" ]; then
+  ARGS+=(--num_workers "$NUM_WORKERS")
+fi
+if [ "$EVAL_BATCH_SIZE" != "auto" ]; then
+  ARGS+=(--eval_batch_size "$EVAL_BATCH_SIZE")
+fi
+ARGS+=(--preset "$PRESET")
 
 # =============== 启动训练 ===============
 python train_ldm.py \
     --split_ratios "$TRAIN_SPLIT_RATIO" "$VAL_SPLIT_RATIO" \
     --random_seed "$RANDOM_SEED" \
-    --batch_size "$BATCH_SIZE" \
-    --num_workers "$NUM_WORKERS" \
     --learning_rate "$LEARNING_RATE" \
     --num_epochs "$NUM_EPOCHS" \
     --val_every "$VAL_EVERY" \

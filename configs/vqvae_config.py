@@ -15,6 +15,8 @@ class VQVAEDatasetConfig:
     random_seed: int = 2025
     batch_size: int = 8
     num_workers: int = 4
+    # DataLoader 预取倍数（每 worker 预取的 batch 数）；aggressive 档拉高以压榨吞吐
+    prefetch_factor: int = 4
 
 
 @dataclass

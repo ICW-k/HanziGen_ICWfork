@@ -1,18 +1,23 @@
 #!/bin/bash
+# ============================================================
+# 本地机训练脚本（conservative 档）：稳定优先，适合个人电脑后台挂机
+# 特点：workers 留 2 核、prefetch 保守、显存预留比例更稳（0.85），
+#       避免影响日常使用、防止 OOM / 系统卡顿。
+# 云端 GPU 实例请改用 scripts/train_vqvae.sh（aggressive 档）
+# ============================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-# =============== 基础参数（魔搭 MODA 档：A10 24GB 显存 / 8 核 CPU / 32GB 内存） ===============
-# 适配实例：ModelScope DSW A10 (24GB / 8核 / 32GB 内存)
-# 依据：512x512 单通道字形图，双路(target+reference)前向+反传，AMP 下 batch=64 约 21.8GB（留 2G 余量）
-# 关键：8 核 CPU 只能支撑 6 个 DataLoader worker（留 2 核给主进程/系统/预取）。
-#      切勿照搬 20 核 A10 的 NUM_WORKERS=14 —— 8 核上会严重超订，CPU 抢核导致速度反而下降。
+# =============== 基础参数（按需修改） ===============
 TARGET_FONT_PATH="fonts/myfont.ttf"   # 目标字体路径（用于数据集构建/分析），格式为.ttf或.otf
 TRAIN_SPLIT_RATIO=0.8                  # 训练集占比（与验证占比相加应为 1.0）
 VAL_SPLIT_RATIO=0.2                    # 验证集占比
 RANDOM_SEED=7777                       # 随机种子（保证可复现）
-BATCH_SIZE=64                          # A10 24G 甜点值（~21.8GB；若 OOM 降至 56）
-NUM_WORKERS=6                          # 8 核 CPU：上限 6（留 2 核给主进程/系统，勿设 8）
+BATCH_SIZE=auto                        # 批次样本数：auto=按显存实时推算（VQ-VAE 约 0.33GB/样本）
+                                       #   手动指定：填入整数（如 44），跳过自动推算
+NUM_WORKERS=auto                       # DataLoader 并行加载进程数：auto=按 CPU 核数推算（本地留 2 核）
+                                       #   手动指定：填入整数，跳过自动推算
+PRESET=conservative                    # 硬件档位：aggressive=云端压榨 / conservative=本地稳妥
 LEARNING_RATE=1e-3                     # 初始学习率，实际学习率会根据余弦退火策略动态调整
 NUM_EPOCHS=600                         # 训练轮数
 VAL_EVERY=5                            # 验证频率：每隔多少 epoch 跑一次全量验证（1=每epoch）
@@ -38,13 +43,19 @@ fi
 if [ "$ENABLE_MIXED_PRECISION" -eq 1 ]; then
   ARGS+=(--mixed_precision)
 fi
+# BATCH_SIZE / NUM_WORKERS 为 auto 时按硬件实时推算；仅显式数字时才传入覆盖
+if [ "$BATCH_SIZE" != "auto" ]; then
+  ARGS+=(--batch_size "$BATCH_SIZE")
+fi
+if [ "$NUM_WORKERS" != "auto" ]; then
+  ARGS+=(--num_workers "$NUM_WORKERS")
+fi
+ARGS+=(--preset "$PRESET")
 
 # =============== 启动训练 ===============
 python train_vqvae.py \
     --split_ratios "$TRAIN_SPLIT_RATIO" "$VAL_SPLIT_RATIO" \
     --random_seed "$RANDOM_SEED" \
-    --batch_size "$BATCH_SIZE" \
-    --num_workers "$NUM_WORKERS" \
     --learning_rate "$LEARNING_RATE" \
     --num_epochs "$NUM_EPOCHS" \
     --val_every "$VAL_EVERY" \
