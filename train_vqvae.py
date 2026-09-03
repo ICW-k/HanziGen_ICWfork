@@ -51,6 +51,13 @@ def parse_args() -> argparse.Namespace:
         "conservative=本地稳妥（留 2 核+保守预取）",
     )
     parser.add_argument(
+        "--vram_reserve_fraction",
+        type=float,
+        help="显存预留比例（可用于训练的那部分显存，0.1-1.0）。"
+        "不传则取环境变量 HANZIGEN_VRAM_RESERVE_FRACTION 或 preset 默认值"
+        "（aggressive 0.95 / conservative 0.85）。OOM 时调小，想提速则调大",
+    )
+    parser.add_argument(
         "--resume_from",
         type=str,
         help="Path to VQVAE weights (.pth) to resume from (only loads model state)",
@@ -136,11 +143,13 @@ def main() -> None:
         auto_batch=args.batch_size is None,
         auto_workers=args.num_workers is None,
         preset=args.preset,
+        vram_reserve_fraction=args.vram_reserve_fraction,
     )
     if tuning["gpu_available"]:
         print(
             f"[硬件] GPU: {tuning['gpu_name']} ({tuning['vram_gb']:.1f} GB) | "
-            f"CPU 核数: {tuning['cpu_cores']} | 档位: {tuning['preset']}"
+            f"CPU 核数: {tuning['cpu_cores']} | 档位: {tuning['preset']} | "
+            f"显存预留: {tuning['vram_reserve_fraction']:.2f}"
         )
     else:
         print(

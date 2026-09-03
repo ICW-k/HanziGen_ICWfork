@@ -7,7 +7,9 @@ from .hardware_utils import (
     check_training_viability,
     detect_hardware,
     print_model_params,
+    resolve_vram_reserve_fraction,
     select_device,
+    VRAM_RESERVE_ENV_VAR,
 )
 
 __all__ = [
@@ -19,5 +21,7 @@ __all__ = [
     "check_training_viability",
     "detect_hardware",
     "print_model_params",
+    "resolve_vram_reserve_fraction",
     "select_device",
+    "VRAM_RESERVE_ENV_VAR",
 ]

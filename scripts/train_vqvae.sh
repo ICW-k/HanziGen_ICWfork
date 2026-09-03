@@ -17,6 +17,10 @@ BATCH_SIZE=auto                        # 批次样本数：auto=按显存实时�
                                        #   手动指定：填入整数（如 44），跳过自动推算
 NUM_WORKERS=auto                       # DataLoader 并行加载进程数：auto=按 CPU 核数推算（云端留 1 核）
                                        #   手动指定：填入整数，跳过自动推算
+VRAM_RESERVE_FRACTION=auto             # 显存预留比例（可用于训练的那部分显存，0.1-1.0）
+                                       #   auto=跟随档位（本脚本 aggressive=0.95）
+                                       #   OOM 调小（如 0.80），想提速调大（如 0.98）
+                                       #   仅影响 VQ-VAE 的 batch 推算，LDM 不受影响
 PRESET=aggressive                      # 硬件档位：aggressive=云端压榨 / conservative=本地稳妥
 LEARNING_RATE=1e-3                     # 初始学习率，实际学习率会根据余弦退火策略动态调整
 NUM_EPOCHS=600                         # 训练轮数
@@ -49,6 +53,9 @@ if [ "$BATCH_SIZE" != "auto" ]; then
 fi
 if [ "$NUM_WORKERS" != "auto" ]; then
   ARGS+=(--num_workers "$NUM_WORKERS")
+fi
+if [ "$VRAM_RESERVE_FRACTION" != "auto" ]; then
+  ARGS+=(--vram_reserve_fraction "$VRAM_RESERVE_FRACTION")
 fi
 ARGS+=(--preset "$PRESET")
 
