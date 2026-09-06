@@ -18,6 +18,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--opttolerance", type=float, help="Curve optimization tolerance"
     )
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        help="并行转换进程数（不传则按 CPU 核数自动推算：核数-2、封顶 32）",
+    )
 
     return parser.parse_args()
 
@@ -26,6 +31,7 @@ def convert_to_svg(
     input_dir: str,
     output_dir: str,
     converting_config: ConvertingConfig,
+    num_workers: int | None = None,
 ) -> None:
     """ """
     converter = GlyphImageConverter(
@@ -34,6 +40,7 @@ def convert_to_svg(
     converter.convert_images_to_svgs(
         input_dir=input_dir,
         output_dir=output_dir,
+        num_workers=num_workers,
     )
 
 
@@ -49,6 +56,7 @@ def main() -> None:
         input_dir=args.input_dir,
         output_dir=args.output_dir,
         converting_config=converting_config,
+        num_workers=args.num_workers,
     )
 
 

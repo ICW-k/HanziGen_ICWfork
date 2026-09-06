@@ -122,6 +122,33 @@ tensorboard --logdir runs/LDM --port 6006 --bind_all
 - `Loss/train` 与 `Loss/val`：训练/验证损失（val loss 持续回升 + train loss 还在降 = 过拟合信号）
 - `Metrics/val/lpips`：LDM 的模型选择指标（越低越好；它创新低时终端会打印 `✅ Best model saved`）
 
+---
+
+## 5.5 训练何时可以提前结束（经验）
+
+**前提**：best 检查点由指标自动保存（主文件永远是最优），提前结束不会损失模型质量，只省机时。
+
+### 两个模型的停止规则
+
+| | VQ-VAE（Cell 3） | LDM（Cell 4） |
+|---|---|---|
+| best 的选择指标 | **val loss**（重建误差） | **LPIPS**（感知质量） |
+| 评估间隔 | `VAL_EVERY=5` | `LPIPS_EVAL_INTERVAL=10` |
+| 可结束的信号 | 连续 **3~5 个验证点**（15~25 epoch）val loss 无新低 | 连续 **3~5 个评估点**（30~50 epoch）终端没有再打印 `✅ Best model saved` |
+| 参考耗时 | VQ-VAE val loss 变化更大更早收敛 | LPIPS 后期常在小数点后三四位抖动 |
+
+### 实际案例（LDM）
+
+- val loss 从 0.032（301 轮）回升到 0.042（400 轮）——过拟合苗头
+- 但 LPIPS 同期 0.1446（360 轮）→ 0.1427（390 轮）仍在创新低
+- **结论：两者打架时 LPIPS 说了算**——最终产物是生成字形，LPIPS 才与交付质量直接挂钩；继续练，直到 LPIPS plateau
+
+### 常见误区
+
+- ❌ "LDM 轮数必须 ≥ VQ-VAE 轮数"：两者是不同任务，各以**自己的指标 plateau** 为准。LDM 默认 1000 轮 > VQ-VAE 600 轮，只是因为生成任务更难收敛，不是对齐关系；LDM 完全可能 500 轮就到顶
+- ❌ "val loss 回升就要立刻停"：对 LDM 只是观察信号，best 由 LPIPS 锁定
+- ❌ "续训时改大 NUM_EPOCHS 延长训练"：余弦退火学习率曲线按总轮数设计，改轮数 = 改变 lr 调度 = 训练动态变化。轮数启动前定好，中途只做"提前停"，不做"延长跑"
+
 ## 6. 产出物位置
 
 | 目录 | 内容 |

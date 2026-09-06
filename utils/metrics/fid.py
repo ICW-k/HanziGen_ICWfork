@@ -3,6 +3,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import torch
 from cleanfid import fid
 from PIL import Image
@@ -10,6 +11,33 @@ from tqdm.rich import tqdm
 
 from utils.hardware.hardware_utils import select_device
 from utils.image.image_utils import get_image_paths
+
+
+# ---- scipy 兼容层 ----
+# scipy>=1.15 移除了 sqrtm 的 disp 参数，而 cleanfid 0.1.10 的 frechet_distance
+# 仍以 sqrtm(..., disp=False) 调用并解包返回值。检测到新 scipy 时打补丁，
+# 使旧调用方式保持可用（disp=False 时返回 (sqrtm, errest) 二元组，与旧版一致）。
+import scipy.linalg as _linalg
+
+_orig_sqrtm = _linalg.sqrtm
+
+
+def _sqrtm_supports_disp() -> bool:
+    try:
+        _orig_sqrtm(np.eye(2, dtype=np.float64), disp=False)
+        return True
+    except TypeError:
+        return False
+
+
+if not _sqrtm_supports_disp():
+
+    def _sqrtm_compat(A, disp=None):
+        result = _orig_sqrtm(A)
+        return (result, 0) if disp is False else result
+
+    _linalg.sqrtm = _sqrtm_compat
+    print("[兼容] 检测到 scipy>=1.15（sqrtm 无 disp 参数），已为 cleanfid 打补丁")
 
 
 def compute_fid_score(
