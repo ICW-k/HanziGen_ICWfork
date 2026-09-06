@@ -21,9 +21,18 @@ PRESET=conservative                    # 硬件档位：aggressive=云端压榨 
 LEARNING_RATE=5e-4                     # 初始学习率，实际学习率会根据余弦退火策略动态调整
 NUM_EPOCHS=1000                         # 训练轮数
 SAMPLE_STEPS=50                        # 样例图生成时的采样步数（用于可视化/评估）
-IMG_SAVE_INTERVAL=10                   # 可视化图片保存间隔（单位：epoch）
-LPIPS_EVAL_INTERVAL=10                 # LPIPS 评估间隔（单位：epoch）
-VAL_EVERY=5                            # 验证频率：每隔多少 epoch 跑一次全量验证（1=每epoch）
+IMG_SAVE_INTERVAL=200                   # （可改，不影响模型质量）可视化对比图保存间隔（单位：epoch），纯肉眼监控
+                                       #   不影响的原因：画图在 no_grad 下运行、只写文件，不参与训练也不参与选模型
+                                       #   提速可调大（如 100），几乎零代价
+LPIPS_EVAL_INTERVAL=10                 # （会影响 best 检查点选择，调大需权衡）LPIPS 评估间隔（单位：epoch）
+                                       #   每次评估含 gen/gt 图生成 + PSNR/SSIM/LPIPS 三件套（约 2.5 分钟）
+                                       #   LPIPS 决定 best 检查点的选择：间隔越大选点越粗，可能错过质量峰值
+                                       #   提速推荐 50（评估开销占比从约 40% 降至 <5%）；不建议超过 100
+VAL_EVERY=50                            # （可改，不影响模型质量）验证频率：每隔多少 epoch 跑一次全量验证（1=每epoch）
+                                       #   不影响的原因：验证在 no_grad 下不更新参数；LDM 的 best 模型只看 LPIPS，
+                                       #   学习率按 epoch 固定步进（scheduler.step()），均不依赖 val loss
+                                       #   调大（如 10）的唯一损失：无法及早从 val loss 曲线发现过拟合
+                                       #   （曲线看 TensorBoard：runs/LDM/；断点续训由 ckpt_save_interval 兜底）
 EVAL_BATCH_SIZE=auto                   # 评估批大小：auto=按显存自适应（>=24G→16，否则→8）
                                        #   手动指定：填入整数，跳过自动推算
 DEVICE="cuda"                          # 训练设备：cuda / cpu / mps
@@ -76,6 +85,5 @@ python train_ldm.py \
     --sample_steps "$SAMPLE_STEPS" \
     --img_save_interval "$IMG_SAVE_INTERVAL" \
     --lpips_eval_interval "$LPIPS_EVAL_INTERVAL" \
-    --eval_batch_size "$EVAL_BATCH_SIZE" \
     --device "$DEVICE" \
     "${ARGS[@]}"

@@ -209,6 +209,10 @@ class VQVAE(nn.Module):
 
             model_save_path = Path(training_config.model_save_path)
             model_save_path.parent.mkdir(parents=True, exist_ok=True)
+            # 周期检查点单独落盘（*_last.pth）：主文件只保留 best，不被周期进度覆盖
+            periodic_save_path = model_save_path.with_name(
+                f"{model_save_path.stem}_last{model_save_path.suffix}"
+            )
 
             start_epoch = 0
             min_val_loss = float("inf")
@@ -218,8 +222,13 @@ class VQVAE(nn.Module):
                     raise FileNotFoundError(
                         f"[ERROR] No checkpoint to resume from: {resume_from}"
                     )
+                # 续训优先用最新的周期检查点（进度最新）；不存在则回退主文件
+                resume_path = Path(resume_from)
+                if periodic_save_path.exists():
+                    resume_path = periodic_save_path
+                    print(f"[RESUME] 检测到周期检查点，从 {periodic_save_path} 恢复")
                 start_epoch, min_val_loss = self._restore_checkpoint(
-                    checkpoint_path=Path(resume_from),
+                    checkpoint_path=resume_path,
                     optimizer=optimizer,
                     scheduler=scheduler,
                     scaler=scaler,
@@ -271,16 +280,17 @@ class VQVAE(nn.Module):
                     )
                     print(f"✅ Best model saved (val loss: {min_val_loss:.6f})")
                 elif ckpt_save_interval > 0 and epoch % ckpt_save_interval == 0:
-                    # 周期保存完整状态，确保即使非最佳 epoch 也能精确续训
+                    # 周期保存完整状态到 *_last.pth，确保即使非最佳 epoch 也能精确续训，
+                    # 同时避免覆盖主文件中的 best 模型
                     self._save_checkpoint(
-                        checkpoint_path=model_save_path,
+                        checkpoint_path=periodic_save_path,
                         optimizer=optimizer,
                         scheduler=scheduler,
                         scaler=scaler,
                         epoch=epoch,
                         min_val_loss=min_val_loss,
                     )
-                    print(f"[CKPT] 周期性检查点已保存 (epoch {epoch})")
+                    print(f"[CKPT] 周期性检查点已保存 (epoch {epoch}) → {periodic_save_path.name}")
 
                 # Print Metrics
                 self._print_epoch_status(
