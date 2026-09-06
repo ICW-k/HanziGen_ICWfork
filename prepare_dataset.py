@@ -47,6 +47,16 @@ def prepare_image_dataset(
         reference_fonts_dir=reference_fonts_dir,
         font_processing_config=font_processing_config,
     )
+    if not ref_generators:
+        # 目录不存在或为空时 glob 返回空列表且不报错，会导致 data/reference 静默缺失，
+        # 直到 extract_charset 阶段才抛出难以定位的错误，故在此提前失败并给出明确指引。
+        raise FileNotFoundError(
+            f"参考字体目录 '{reference_fonts_dir}' 下没有找到任何 .ttf / .otf 文件，"
+            f"data/reference 将无法生成。\n"
+            f"请确认 Jigmo 参考字体（jigmo.ttf / jigmo2.ttf / jigmo3.ttf）已放入该目录；"
+            f"若缺失，运行 notebook 的 Cell 1 会自动准备，或手动从 "
+            f"https://kamichikoichi.github.io/jigmo/ 下载后解压到该目录。"
+        )
 
     tgt_generator.generate_glyph_images(
         source_charset_path=source_charset_path,
