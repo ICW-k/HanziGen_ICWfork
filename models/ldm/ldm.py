@@ -16,7 +16,7 @@ from tqdm.rich import tqdm
 from configs.font_processing_config import FontProcessingConfig
 from configs.ldm_config import LDMInferenceConfig, LDMModelConfig, LDMTrainingConfig
 from configs.vqvae_config import VQVAEModelConfig
-from datasets.image_dataset import PairedGlyphImageDataset
+from datasets.image_dataset import PairedGlyphImageDataset, ReferenceOnlyGlyphImageDataset
 from datasets.loader import Loader
 from models.unet.unet import UNet
 from models.vqvae.vqvae import VQVAE
@@ -832,8 +832,10 @@ class LDM(nn.Module):
         tgt_output_dir = sample_dir / inference_config.gt_split
         ref_output_dir = sample_dir / inference_config.ref_split
 
-        for directory in [tgt_output_dir, ref_output_dir]:
-            directory.mkdir(parents=True, exist_ok=True)
+        # #5 优化：推理补字只需参考字形，无需 target gt（缺失字在目标字体里本就是空白/.notdef，
+        # 渲染 gt 既无意义也浪费 CPU/IO；评估用的是训练时 eval_outputs/gt，与此处 inference/gt 无关）。
+        # 故只创建 ref 目录，跳过 tgt 渲染。
+        ref_output_dir.mkdir(parents=True, exist_ok=True)
 
         # 参考字形：按优先级生成，默认"先命中的优先"
         # （同一字符被多个参考字体覆盖时，优先级高的字体先写，后面的字体不再覆盖，
@@ -864,13 +866,7 @@ class LDM(nn.Module):
             except Exception:
                 ref_covered.append(set())
 
-        for char in tqdm(charset, desc="Generating ground truth and reference images"):
-            tgt_generator.save_glyph_image(
-                char=char,
-                output_dir=tgt_output_dir,
-                img_size=font_processing_config.img_size,
-            )
-
+        for char in tqdm(charset, desc="Generating reference images"):
             for ref_generator, covered_charset in zip(ref_generators, ref_covered):
                 if char not in covered_charset:
                     continue
@@ -882,9 +878,16 @@ class LDM(nn.Module):
                 if first_wins:
                     break  # 先命中的参考字体优先，后面的字体不再覆盖
 
-        dataset = PairedGlyphImageDataset(tgt_output_dir, ref_output_dir)
+        # #5: ref-only 数据集（无需 target gt 对齐）；#3: DataLoader 加并行读取
+        dataset = ReferenceOnlyGlyphImageDataset(ref_output_dir)
+        num_workers = getattr(inference_config, "num_workers", 0)
         loader = DataLoader(
-            dataset, batch_size=inference_config.batch_size, shuffle=False
+            dataset,
+            batch_size=inference_config.batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=(self.device.type == "cuda"),
+            persistent_workers=(num_workers > 0),
         )
         self._generate_images_from_loader(
             loader=loader,

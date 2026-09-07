@@ -115,3 +115,29 @@ class MetricsImageDataset(Dataset):
             "gen_img": gen_img,
             "gt_img": gt_img,
         }
+
+
+class ReferenceOnlyGlyphImageDataset(Dataset):
+    """
+    Reference-only image dataset for inference (glyph completion).
+
+    推理补字专用：只需要参考字形图即可生成目标字体的缺失字，
+    无需 target ground truth（缺失字在目标字体里本就是空白 / .notdef，
+    渲染 gt 既无意义也浪费 CPU/IO）。配合 LDM.generate_images_from_charset_file 使用。
+    """
+
+    def __init__(
+        self,
+        reference_img_dir: str | Path,
+    ):
+        self.ref_img_paths = get_image_paths(reference_img_dir)
+        self.img_names = get_image_names(self.ref_img_paths)
+        self.transform = create_transform(normalize=True)
+
+    def __len__(self):
+        return len(self.ref_img_paths)
+
+    def __getitem__(self, idx):
+        ref_img = Image.open(self.ref_img_paths[idx]).convert("L")
+        ref_img = self.transform(ref_img)
+        return {"ref_img": ref_img, "img_name": self.img_names[idx]}

@@ -82,3 +82,5 @@ class LDMInferenceConfig:
 
     batch_size: int = 16
     sample_steps: int = 50
+    # 推理 DataLoader 并行加载进程数（0=串行）；PNG 读盘是 IO 密集，4-8 可显著提速
+    num_workers: int = 4

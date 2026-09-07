@@ -1,4 +1,5 @@
 import argparse
+import os
 
 import torch
 
@@ -26,6 +27,11 @@ def parse_args() -> argparse.Namespace:
         "--pretrained_ldm_path", type=str, help="Path to pretrained LDM model"
     )
     parser.add_argument("--batch_size", type=int, help="Batch size")
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        help="DataLoader workers for inference (0=serial; 不传则按 CPU 核数 auto 推算)",
+    )
     parser.add_argument("--sample_root", type=str, help="Sample root directory")
     parser.add_argument("--sample_steps", type=int, help="Number of sampling steps")
     parser.add_argument(
@@ -96,6 +102,12 @@ def main() -> None:
         args=args,
     )
     device = select_device(args.device)
+
+    # 推理 DataLoader 并行：未显式指定 --num_workers 时按 CPU 核数 auto 推算
+    # （留 2 核、封顶 8；推理 IO 密集，过多 worker 收益递减）
+    if args.num_workers is None:
+        ldm_inference_config.num_workers = max(2, min(8, (os.cpu_count() or 4) - 2))
+        print(f"[自适应] 推理 num_workers={ldm_inference_config.num_workers}")
 
     inference(
         target_font_path=args.target_font_path,
