@@ -821,38 +821,61 @@ class LDM(nn.Module):
         for directory in [tgt_output_dir, ref_output_dir]:
             directory.mkdir(parents=True, exist_ok=True)
 
-        for char in tqdm(charset, desc="Generating ground truth and reference images"):
-            tgt_generator.save_glyph_image(
+        # 参考字形：按优先级生成，默认"先命中的优先"
+    # （同一字符被多个参考字体覆盖时，优先级高的字体先写，后面的字体不再覆盖，
+    #   避免 jigmo2/3 这类生僻字体覆盖 jigmo.ttf 的常用简繁字形）。
+    # 设 HANZIGEN_REF_FONT_PRIORITY 可指定顺序；设 HANZIGEN_REF_FONT_MODE=last 恢复旧行为。
+    try:
+        from utils.font.font_utils import resolve_reference_fonts, use_first_reference_font
+
+        ranked = resolve_reference_fonts(reference_fonts_dir)
+        order = {path.name: i for i, path in enumerate(ranked)}
+        ref_generators = sorted(
+            ref_generators, key=lambda g: order.get(Path(g.font_path).name, 999)
+        )
+        first_wins = use_first_reference_font()
+    except Exception:
+        first_wins = True
+
+    # 预读各参考字体的覆盖字符集（原实现每个字都重读一次文件）
+    ref_covered = []
+    for _g in ref_generators:
+        _p = (
+            Path(font_processing_config.unihan_coverage_charset_dir)
+            / _g.font_name
+            / "covered.txt"
+        )
+        try:
+            ref_covered.append(read_charset_from_file(_p) if _p.exists() else set())
+        except Exception:
+            ref_covered.append(set())
+
+    for char in tqdm(charset, desc="Generating ground truth and reference images"):
+        tgt_generator.save_glyph_image(
+            char=char,
+            output_dir=tgt_output_dir,
+            img_size=font_processing_config.img_size,
+        )
+
+        for ref_generator, covered_charset in zip(ref_generators, ref_covered):
+            if char not in covered_charset:
+                continue
+            ref_generator.save_glyph_image(
                 char=char,
-                output_dir=tgt_output_dir,
+                output_dir=ref_output_dir,
                 img_size=font_processing_config.img_size,
             )
+            if first_wins:
+                break  # 先命中的参考字体优先，后面的字体不再覆盖
 
-            for ref_generator in ref_generators:
-                covered_charset_path = (
-                    Path(font_processing_config.unihan_coverage_charset_dir)
-                    / ref_generator.font_name
-                    / "covered.txt"
-                )
-                covered_charset = read_charset_from_file(
-                    charset_path=covered_charset_path,
-                )
-
-                if char in covered_charset:
-                    ref_generator.save_glyph_image(
-                        char=char,
-                        output_dir=ref_output_dir,
-                        img_size=font_processing_config.img_size,
-                    )
-
-        dataset = PairedGlyphImageDataset(tgt_output_dir, ref_output_dir)
-        loader = DataLoader(
-            dataset, batch_size=inference_config.batch_size, shuffle=False
-        )
-        self._generate_images_from_loader(
-            loader=loader,
-            config=inference_config,
-        )
+    dataset = PairedGlyphImageDataset(tgt_output_dir, ref_output_dir)
+    loader = DataLoader(
+        dataset, batch_size=inference_config.batch_size, shuffle=False
+    )
+    self._generate_images_from_loader(
+        loader=loader,
+        config=inference_config,
+    )
 
     # ===== Logging =====
     def _log_training_metrics(

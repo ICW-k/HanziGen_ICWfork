@@ -53,9 +53,13 @@ class GlyphImageGenerator:
         self,
         source_charset_path: str | Path,
         font_role: Literal["target", "reference"],
+        exclude_chars: set[str] | None = None,
     ) -> None:
         """
         Generate glyph images for the given font role ("target" or "reference").
+
+        exclude_chars: 需要跳过的字符（供参考字体按优先级"先命中优先"时使用：
+        已由优先级更高的字体生成过的字，不再被后面的字体覆盖）。
         """
         num_workers = self.config.num_workers
 
@@ -74,6 +78,8 @@ class GlyphImageGenerator:
             covered_charset_path=covered_charset_path,
             sample_ratio=self.config.sample_ratio,
         )
+        if exclude_chars:
+            selected_glyphs = [g for g in selected_glyphs if g not in exclude_chars]
 
         self._process_glyphs_in_parallel(
             glyphs=selected_glyphs,

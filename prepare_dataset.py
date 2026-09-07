@@ -4,7 +4,19 @@ from pathlib import Path
 
 from configs import FontProcessingConfig
 from utils.argparse.argparse_utils import update_config_from_args
+from utils.font.font_utils import read_charset_from_file
 from utils.image import GlyphImageGenerator
+
+
+def _covered_chars(font_name: str, coverage_dir: str) -> set[str]:
+    """读取某参考字体在 unihan 覆盖率分析下已覆盖的字符集。"""
+    p = Path(coverage_dir) / font_name / "covered.txt"
+    if not p.exists():
+        return set()
+    try:
+        return read_charset_from_file(p)
+    except Exception:
+        return set()
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,6 +59,18 @@ def prepare_image_dataset(
         reference_fonts_dir=reference_fonts_dir,
         font_processing_config=font_processing_config,
     )
+    # 按优先级排序（默认文件名顺序：jigmo → jigmo2 → jigmo3）
+    try:
+        from utils.font.font_utils import resolve_reference_fonts, use_first_reference_font
+
+        ranked = resolve_reference_fonts(reference_fonts_dir)
+        order = {p.name: i for i, p in enumerate(ranked)}
+        ref_generators = sorted(
+            ref_generators, key=lambda g: order.get(Path(g.font_path).name, 999)
+        )
+    except Exception:
+        use_first_reference_font = None
+
     if not ref_generators:
         # 目录不存在或为空时 glob 返回空列表且不报错，会导致 data/reference 静默缺失，
         # 直到 extract_charset 阶段才抛出难以定位的错误，故在此提前失败并给出明确指引。
@@ -62,11 +86,30 @@ def prepare_image_dataset(
         source_charset_path=source_charset_path,
         font_role="target",
     )
+
+    # 参考字形：同一字符常被多个参考字体同时覆盖。默认采用"先命中的优先"
+    # （优先级高的字体先写，后面的字体跳过已生成的字），避免生僻字体覆盖常用字形；
+    # 设 HANZIGEN_REF_FONT_MODE=last 可恢复旧行为（后写入覆盖）。
+    first_wins = True
+    try:
+        from utils.font.font_utils import use_first_reference_font as _first
+
+        first_wins = _first()
+    except Exception:
+        pass
+
+    saved: set[str] = set()
     for ref_generator in ref_generators:
         ref_generator.generate_glyph_images(
             source_charset_path=source_charset_path,
             font_role="reference",
+            exclude_chars=saved if first_wins else None,
         )
+        if first_wins:
+            saved |= _covered_chars(
+                ref_generator.font_name,
+                font_processing_config.unihan_coverage_charset_dir,
+            )
 
 
 def main() -> None:

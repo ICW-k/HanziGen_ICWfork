@@ -20,7 +20,10 @@ NUM_WORKERS=auto                       # DataLoader 并行加载进程数：auto
 PRESET=conservative                    # 硬件档位：aggressive=云端压榨 / conservative=本地稳妥
 LEARNING_RATE=5e-4                     # 初始学习率，实际学习率会根据余弦退火策略动态调整
 NUM_EPOCHS=1000                         # 训练轮数
-SAMPLE_STEPS=50                        # 样例图生成时的采样步数（用于可视化/评估）
+SAMPLE_STEPS=50                        # 去噪采样步数（DDIM）：可视化/评估时生成字形的迭代次数
+                                       #   步数越多质量越好、越慢；50=折中，100=更准（耗时翻倍）
+                                       #   注意：这只影响训练期的可视化与评估图，不影响最终补字质量
+                                       #        最终补字用的是 scripts/inference.sh 里的同名参数
 IMG_SAVE_INTERVAL=200                   # （可改，不影响模型质量）可视化对比图保存间隔（单位：epoch），纯肉眼监控
                                        #   不影响的原因：画图在 no_grad 下运行、只写文件，不参与训练也不参与选模型
                                        #   提速可调大（如 100），几乎零代价

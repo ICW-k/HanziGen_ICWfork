@@ -149,6 +149,126 @@ tensorboard --logdir runs/LDM --port 6006 --bind_all
 - ❌ "val loss 回升就要立刻停"：对 LDM 只是观察信号，best 由 LPIPS 锁定
 - ❌ "续训时改大 NUM_EPOCHS 延长训练"：余弦退火学习率曲线按总轮数设计，改轮数 = 改变 lr 调度 = 训练动态变化。轮数启动前定好，中途只做"提前停"，不做"延长跑"
 
+---
+
+## 5.6 结果不满意怎么排查
+
+### 训练期对比图 `samples_字体/val/` 是什么
+
+训练时每 `IMG_SAVE_INTERVAL` 个 epoch 会存一张**三联图**，文件名 `epoch_XXXX_字符.png`，从左到右三格依次是：
+
+| 位置 | 内容 | 来源 |
+|---|---|---|
+| 第 1 格 | **ref** | Jigmo 参考字形（模型的输入条件） |
+| 第 2 格 | **tgt** | 你的字体对该字的**真实渲染**（标准答案） |
+| 第 3 格 | **gen** | LDM 生成的字形（模型输出） |
+
+**关键**：这些字来自 `train.txt` / `val.txt`，也就是**你字体本来就有的字**——不是要补的缺失字。之所以用"已有字"做检验，是因为只有已有字才有真值可以比对；缺失字没有标准答案，无法这样看。
+
+同理 `samples_字体/train/` 是训练集上的三联图（用来看过拟合程度）。
+
+### 怎么看、怎么判断
+
+- **第 2 格（tgt）本身就糊/错位/笔画残缺** → 问题在**数据渲染**，不是模型。检查 `scripts/prepare_dataset.sh` 的 `IMG_WIDTH/IMG_HEIGHT` 与字形居中，重跑 Cell 2
+- **第 2 格清楚，但第 3 格（gen）明显糊/缺笔** → 见下方「gen 糊 ≠ 没训够」
+- **某些字特别差** → 该字在 Jigmo 与你的字体里风格差异大，属常见现象
+
+### ⚠️ train/val 是不同的字，不能做"同字对比"
+
+训练集与验证集是**互斥划分**（8:2），两边没有任何一个字重合。因此"train 图好、val 图差"指的是**两侧整体水平**的差异：
+
+- `train/` 里 gen ≈ tgt（模型把训练字记住了）
+- `val/` 里 gen 明显差 → **过拟合**
+
+注意：这些图是**抽样**——代码只取每个 loader 的第一个 batch（几个字），有偶然性。判断过拟合应以 TensorBoard 的 **train/val loss 剪刀差**为准，图仅作辅助印证。
+
+### gen 糊 ≠ 一定没训够
+
+正确的"同字对比"用法是：**同一个字在不同 epoch 的图**按 epoch 号纵向比较（文件名形如 `epoch_0040_xxxx.png`）：
+
+```bash
+ls "samples_字体/val/" | grep <字符码位>      # 按 epoch 号从小到大看演变
+```
+
+| 现象 | 结论 | 对策 |
+|---|---|---|
+| 随 epoch 推进**持续变清晰** | 确实没训够 | 继续训练 |
+| 到某 epoch 后**不再改善**（LPIPS 已平） | 轮数不是瓶颈，到模型上限 | 查 VQ-VAE 质量 / 参考字形差异 / 提高 SAMPLE_STEPS |
+| train 与 val **都一直糊** | 数据渲染或 VQ-VAE 重建有问题 | 查 `prepare_dataset.sh` 尺寸，或重训 VQ-VAE |
+
+补充：训练期可视化用的是 `train_ldm*.sh` 里的 `SAMPLE_STEPS`（默认 50），而最终推理可用 `inference.sh` 里的 100 步——**训练图糊不代表最终交付的字形糊**，最终质量以 `inference/gen/` 的实际产物为准。
+
+### SAMPLE_STEPS 是什么
+
+扩散模型的**去噪采样步数**（本项目的实现是 DDIM，见 `LDM._synthesize_images_from_references`）：从随机噪声出发，模型一步步去噪生成字形，这个"步数"就是迭代次数。
+
+- 步数越多 → 细节越准、字形错误越少；耗时**线性**增长
+- 默认 50；结果不好时**先试 100**（质量明显提升，推理时间翻倍）
+- 只想快速预览可设 20（约 2.5 倍速，质量明显下降）
+- 注意有两个同名参数：`scripts/inference.sh` 的管**最终补字**（改这个才影响交付质量），`train_ldm*.sh` 的只管训练期可视化/评估图
+
+### 定向排查某个部首 / 某个字（如简体"马"旁）
+
+LDM 的输入是参考字形 `ref`、输出是生成字形 `gen`。某个字错了，**第一步永远是先确认 ref 对不对**——参考字形错了，模型再怎么训练也不可能生成对的结构。
+
+```python
+# 1) 先看命名格式（不同版本可能是 uni9A6C / 9A6C / U+9A6C）
+import os
+d = "samples_字体/inference/ref"
+print(os.listdir(d)[:5])
+```
+
+```python
+# 2) 拼接显示：参考字形 vs 生成字形（把 FONT 换成你的字体名）
+import os, re
+from PIL import Image
+from IPython.display import display
+
+FONT = "你的字体名"                      # 与 FONT_NAME 一致
+ref_dir = f"samples_{FONT}/inference/ref"
+gen_dir = f"samples_{FONT}/inference/gen"
+
+def code_of(name):                       # 从文件名提取十六进制码位
+    m = re.search(r"([0-9a-fA-F]{4,6})", os.path.basename(name))
+    return int(m.group(1), 16) if m else None
+
+START, END = 0x9A6C, 0x9BFF               # 马部区间（按需改）
+names = [f for f in os.listdir(ref_dir) if f.endswith(".png")
+         and (code_of(f) or -1) and START <= code_of(f) <= END]
+print("命中", len(names), "个马旁字")
+
+for n in names[:12]:                      # 一次看 12 个
+    rp, gp = os.path.join(ref_dir, n), os.path.join(gen_dir, n)
+    if not os.path.exists(gp):
+        continue
+    r, g = Image.open(rp), Image.open(gp)
+    w, h = r.width, r.height
+    combo = Image.new("L", (w * 2, h))
+    combo.paste(r, (0, 0)); combo.paste(g, (w, 0))   # 左=参考 右=生成
+    display(combo)
+    print(n)
+```
+
+**判读**：左边 ref 是标准简体「马」而右边 gen 结构错 → 模型泛化问题；左边 ref 本身就不是简体「马」→ 参考字形选错了。
+
+> 注意：同一字符若被多个 Jigmo 字体同时覆盖，`generation` 按文件名顺序写入，**靠后的字体（jigmo2 / jigmo3）会覆盖靠前的 jigmo.ttf**。如需让常用简繁字只用 jigmo.ttf 作参考，可临时把 jigmo2/3 移出 `fonts/jigmo/`（代价是生僻字失去参考）。
+
+### ⚠️ 缺字无法做 LPIPS 评估，也无法"靶向训练"
+
+LPIPS / PSNR / SSIM 都需要**真值（gt）**做对比：
+
+- 你字体**已有**的字（如繁体「馬」、含馬部的日语字）有真值 → 可以单独挑出来算指标
+- **要补的缺失字**（简体「马」）**没有真值** → 既算不了 LPIPS，也没有监督信号可供训练
+
+因此不存在"针对简体马做靶向训练"这条路——模型没有该字在目标字体下的标准答案可学。可行的替代是：确保训练集覆盖目标字体里所有含馬/马部的**已有**字（默认就是全覆盖）、提高 `SAMPLE_STEPS`、继续训练提升整体泛化。
+
+### 排查顺序（按成本从低到高）
+
+1. 把 `scripts/inference.sh` 的 `SAMPLE_STEPS` 改成 100 重跑 Cell 5（零训练成本，常有效）
+2. 看 `val/` 三联图定位是数据问题还是模型问题
+3. 继续训练 / 重训 LDM（Cell 4）
+4. 重训 VQ-VAE（Cell 3，成本最高，但它是重建质量的上限）
+
 ## 6. 产出物位置
 
 | 目录 | 内容 |
