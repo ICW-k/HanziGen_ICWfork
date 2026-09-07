@@ -3,6 +3,11 @@ import os
 import torch
 import torch.nn as nn
 
+try:
+    from torch.cuda import OutOfMemoryError as _CudaOOM
+except ImportError:  # torch < 1.13
+    _CudaOOM = RuntimeError
+
 
 def select_device(
     device: str | torch.device | None = None,
@@ -23,7 +28,9 @@ def select_device(
         device = torch.device(device)
 
     # 对固定输入尺寸启用 cuDNN benchmark：让 cuDNN 自动挑选最优卷积算法，
-    # 显著加速 VQ-VAE / UNet 的前向与反向，且不改变任何数值结果。
+    # 显著加速 VQ-VAE / UNet 的前向与反向。注意：不同算法的浮点累加顺序可能不同，
+    # 训练数值会有细微差异，固定随机种子也无法逐位复现（对最终生成质量影响可忽略）。
+    # 需要严格可复现时，删除下面两行即可。
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
 
@@ -301,3 +308,47 @@ def apply_auto_tuning(
         "prefetch_factor": getattr(dataset_config, "prefetch_factor", p["prefetch_factor"]),
         "eval_batch_size": auto_eval_batch_size(info["vram_gb"]),
     }
+
+
+def probe_vqvae_batch_fits(
+    model: nn.Module,
+    batch_size: int,
+    img_size: tuple[int, int] = (512, 512),
+    mixed_precision: bool = True,
+    min_batch: int = 4,
+) -> int:
+    """
+    用零数据对 VQ-VAE 做一次前向+反向 dry-run，实测 batch 是否放得下显存。
+
+    auto 推算 batch 依赖 0.33 GB/样本 的经验值，不同 GPU 架构 / 驱动 / PyTorch
+    版本下实际占用会有出入。此探测应在训练真正开始前运行：若 OOM 则 batch 减半
+    重试，返回实测可用的最大 batch（不低于 min_batch）；非 CUDA 设备直接返回原值。
+
+    注意：探测需数秒，并在显存中创建临时张量（结束后已清理）；建议传入临时创建
+    的模型实例——探测的 forward 会按训练模式更新 BatchNorm 统计量（若存在），
+    不会修改权重，但不应直接探测即将用于训练的同一实例。
+    """
+    device = model.device
+    if device.type != "cuda":
+        return batch_size
+
+    height, width = img_size
+    test_batch = batch_size
+    while test_batch >= min_batch:
+        try:
+            torch.cuda.empty_cache()
+            scaler = torch.cuda.amp.GradScaler(enabled=mixed_precision)
+            x = torch.zeros(test_batch, 1, height, width, device=device)
+            with torch.autocast(device_type="cuda", enabled=mixed_precision):
+                recon, vq_loss, _ = model(x)
+                loss = recon.mean() + vq_loss.mean()
+            scaler.scale(loss).backward()
+            model.zero_grad(set_to_none=True)
+            del x, recon, vq_loss, loss, scaler
+            torch.cuda.empty_cache()
+            return test_batch
+        except _CudaOOM:
+            model.zero_grad(set_to_none=True)
+            torch.cuda.empty_cache()
+            test_batch //= 2
+    return min_batch

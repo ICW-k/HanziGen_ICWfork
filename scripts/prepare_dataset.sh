@@ -1,6 +1,8 @@
 #!/bin/bash
 
-TARGET_FONT_PATH="fonts/ChangguMingtiBold.otf"
+# 目标字体路径：默认 fonts/myfont.ttf（占位，请替换为你的字体，.ttf 或 .otf）。
+# 也可不改本文件，直接用环境变量覆盖：export HANZIGEN_TARGET_FONT="fonts/你的字体.otf"
+TARGET_FONT_PATH="${HANZIGEN_TARGET_FONT:-fonts/myfont.ttf}"
 REFERENCE_FONTS_DIR="fonts/jigmo/"
 IMG_WIDTH=512
 IMG_HEIGHT=512

@@ -14,6 +14,7 @@ from tqdm.rich import tqdm
 
 from configs.vqvae_config import VQVAEModelConfig, VQVAETrainingConfig
 from datasets.loader import Loader
+from utils.checkpoint import load_checkpoint
 from utils.hardware.hardware_utils import select_device
 
 from .vqvae_encoder_decoder import VQVAEDecoder, VQVAEEncoder, VQVAEQuantizer
@@ -166,10 +167,7 @@ class VQVAE(nn.Module):
         Supports both the new full-state format (dict with "model" key) and the legacy
         pure state_dict format (weights-only resume, epoch restarts from 0).
         """
-        try:
-            ckpt = torch.load(checkpoint_path, map_location=self.device)
-        except TypeError:
-            ckpt = torch.load(checkpoint_path, map_location=self.device, weights_only=True)
+        ckpt = load_checkpoint(checkpoint_path, map_location=self.device)
 
         if isinstance(ckpt, dict) and "model" in ckpt:
             self.load_state_dict(ckpt["model"], strict=True)

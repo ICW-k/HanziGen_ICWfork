@@ -10,6 +10,7 @@ from configs import (
 )
 from models import LDM
 from utils.argparse.argparse_utils import update_config_from_args
+from utils.checkpoint import load_checkpoint
 from utils.hardware.hardware_utils import print_model_params, select_device
 
 
@@ -53,12 +54,12 @@ def inference(
         device=device,
     )
 
-    ckpt = torch.load(
+    # 统一走兼容层：兼容新旧 torch（weights_only 参数有无）与新旧保存格式
+    #   新格式（训练中保存的完整状态 dict，含 "model" key）与旧格式（纯 state_dict）
+    ckpt = load_checkpoint(
         ldm_inference_config.pretrained_ldm_path,
         map_location="cpu",
     )
-    # 兼容两种 checkpoint 格式：
-    #   新格式（训练中保存的完整状态 dict，含 "model" key）与旧格式（纯 state_dict）
     state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
     ldm.load_state_dict(state_dict, strict=False)
 

@@ -12,6 +12,7 @@ from utils.argparse.argparse_utils import update_config_from_args
 from utils.hardware.hardware_utils import (
     apply_auto_tuning,
     print_model_params,
+    probe_vqvae_batch_fits,
     select_device,
 )
 
@@ -136,11 +137,12 @@ def main() -> None:
 
     # 硬件自适应：batch_size / num_workers 未显式传入时按真实硬件实时推算，
     # 消除"多配置专用脚本"，并保证 GPU 与 CPU 数据供给同步（避免线程饥饿 / GPU 空转）。
+    auto_batch = args.batch_size is None
     tuning = apply_auto_tuning(
         dataset_config,
         device,
         mode="vqvae",
-        auto_batch=args.batch_size is None,
+        auto_batch=auto_batch,
         auto_workers=args.num_workers is None,
         preset=args.preset,
         vram_reserve_fraction=args.vram_reserve_fraction,
@@ -161,6 +163,30 @@ def main() -> None:
         f"num_workers={tuning['num_workers']} | "
         f"prefetch_factor={tuning['prefetch_factor']}"
     )
+
+    # 显存实测：auto 推算的 batch 依赖经验值（0.33GB/样本），训练开始前用 dry-run
+    # 验证一次前向+反传，OOM 则自动减半降档；显式指定的 batch 只提示不改动
+    if tuning["gpu_available"]:
+        probe_model = VQVAE(model_config=model_config, device=device)
+        probed = probe_vqvae_batch_fits(
+            model=probe_model,
+            batch_size=dataset_config.batch_size,
+            mixed_precision=training_config.mixed_precision,
+        )
+        del probe_model
+        torch.cuda.empty_cache()
+        if probed < dataset_config.batch_size:
+            if auto_batch:
+                print(
+                    f"[显存实测] batch {dataset_config.batch_size} 超出实际可用显存，"
+                    f"自动降为 {probed}"
+                )
+                dataset_config.batch_size = probed
+            else:
+                print(
+                    f"[WARN] 显存实测：batch {dataset_config.batch_size} 可能 OOM"
+                    f"（实测上限约 {probed}），仍按指定值继续，OOM 时请手动调小"
+                )
 
     train_vqvae(
         dataset_config=dataset_config,

@@ -9,7 +9,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
 # =============== 基础参数（按需修改） ===============
-TARGET_FONT_PATH="fonts/myfont.ttf"   # 目标字体路径（用于数据集构建/分析）
+TARGET_FONT_PATH="${HANZIGEN_TARGET_FONT:-fonts/myfont.ttf}"
+                                       # 目标字体路径（用于数据集构建/分析）
+                                       #   默认 fonts/myfont.ttf 为占位，可改本行；
+                                       #   或不改文件，直接 export HANZIGEN_TARGET_FONT="fonts/你的字体.otf"
 TRAIN_SPLIT_RATIO=0.8                  # 训练集占比（与验证占比相加应为 1.0）
 VAL_SPLIT_RATIO=0.2                    # 验证集占比
 RANDOM_SEED=9999                       # 随机种子（保证可复现）

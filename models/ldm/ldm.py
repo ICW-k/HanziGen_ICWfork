@@ -20,6 +20,7 @@ from datasets.image_dataset import PairedGlyphImageDataset
 from datasets.loader import Loader
 from models.unet.unet import UNet
 from models.vqvae.vqvae import VQVAE
+from utils.checkpoint import load_checkpoint
 from utils.font.font_utils import read_charset_from_file
 from utils.hardware.hardware_utils import select_device
 from utils.image.image_generator import GlyphImageGenerator
@@ -30,6 +31,10 @@ from utils.metrics.ssim import compute_ssim_from_directories
 
 from .scheduler import SigmoidScheduler
 from .time_embedding import TimeEmbedding
+
+# latent 缓存的内存软上限（默认 2GB）。超过后不再缓存新字符，已缓存条目继续
+# 复用；未命中的字符每次现场编码，仅损失少量速度，正确性不受影响。
+_LATENT_CACHE_MAX_BYTES = 2 * 1024**3
 
 
 class LDM(nn.Module):
@@ -86,8 +91,10 @@ class LDM(nn.Module):
 
         # VQ-VAE 编码结果缓存（img_name -> (tgt_latent, ref_latent)）。
         # VQ-VAE 冻结后 latent 是确定性的，缓存可避免每个 batch 重复编码，显著提速。
-        # latent 尺寸很小（2x64x64），全量驻留 CPU 内存仅数百 MB，12.7GB 系统 RAM 无压力。
+        # 内存开销：每个字符 2 个 fp32 latent（2x64x64）约 64KB，GBK 全量（约 2 万字）
+        # 约 1.3GB。超过 _LATENT_CACHE_MAX_BYTES 后停止新增缓存（已缓存的继续复用）。
         self._latent_cache: dict[str, tuple[Tensor, Tensor]] = {}
+        self._latent_cache_bytes = 0
 
         # Move model to device
         self.to(self.device)
@@ -106,11 +113,9 @@ class LDM(nn.Module):
                 f"VQ-VAE checkpoint path {pretrained_vqvae_path} does not exist."
             )
 
-        ckpt = torch.load(
-            pretrained_vqvae_path,
-            map_location=self.device,
-            weights_only=True,
-        )
+        # 统一走兼容层：兼容新旧 torch（weights_only 参数有无）与新旧保存格式
+        #（纯 state_dict / 含 "model" 的完整训练状态）
+        ckpt = load_checkpoint(pretrained_vqvae_path, map_location=self.device)
         # VQ-VAE checkpoint 可能是完整训练状态（{"model": ..., "optimizer": ...}）
         # 也可能是裸 state_dict；两者都兼容
         if isinstance(ckpt, dict) and "model" in ckpt:
@@ -176,7 +181,14 @@ class LDM(nn.Module):
             pt_lat_cpu = pt_lat.detach().cpu()
             pr_lat_cpu = pr_lat.detach().cpu()
             for i, name in enumerate(pending_names):
-                self._latent_cache[name] = (pt_lat_cpu[i], pr_lat_cpu[i])
+                tgt_lat, ref_lat = pt_lat_cpu[i], pr_lat_cpu[i]
+                item_bytes = tgt_lat.numel() * tgt_lat.element_size() + (
+                    ref_lat.numel() * ref_lat.element_size()
+                )
+                # 内存软上限：超过后不再缓存新条目（本次计算结果仍正常返回使用）
+                if self._latent_cache_bytes + item_bytes <= _LATENT_CACHE_MAX_BYTES:
+                    self._latent_cache[name] = (tgt_lat, ref_lat)
+                    self._latent_cache_bytes += item_bytes
             tgt_latents.extend(pt_lat_cpu)
             ref_latents.extend(pr_lat_cpu)
 
@@ -272,10 +284,7 @@ class LDM(nn.Module):
         Supports both the new full-state format (dict with "model" key) and the legacy
         pure state_dict format (weights-only resume, epoch restarts from 0).
         """
-        try:
-            ckpt = torch.load(checkpoint_path, map_location=self.device)
-        except TypeError:
-            ckpt = torch.load(checkpoint_path, map_location=self.device, weights_only=True)
+        ckpt = load_checkpoint(checkpoint_path, map_location=self.device)
 
         if isinstance(ckpt, dict) and "model" in ckpt:
             self.load_state_dict(ckpt["model"], strict=True)
@@ -306,6 +315,11 @@ class LDM(nn.Module):
         epoch / best-LPIPS are restored so training continues exactly where it stopped
         (true epoch-level resume).
         """
+        # 每次 fit 重新开始：清空上一次训练残留的 latent 缓存，
+        # 避免 VQ-VAE 权重变化后复用过期 latent
+        self._latent_cache.clear()
+        self._latent_cache_bytes = 0
+
         if not resume_from:
             self._load_pretrained_vqvae(training_config.pretrained_vqvae_path)
         else:
@@ -822,60 +836,60 @@ class LDM(nn.Module):
             directory.mkdir(parents=True, exist_ok=True)
 
         # 参考字形：按优先级生成，默认"先命中的优先"
-    # （同一字符被多个参考字体覆盖时，优先级高的字体先写，后面的字体不再覆盖，
-    #   避免 jigmo2/3 这类生僻字体覆盖 jigmo.ttf 的常用简繁字形）。
-    # 设 HANZIGEN_REF_FONT_PRIORITY 可指定顺序；设 HANZIGEN_REF_FONT_MODE=last 恢复旧行为。
-    try:
-        from utils.font.font_utils import resolve_reference_fonts, use_first_reference_font
-
-        ranked = resolve_reference_fonts(reference_fonts_dir)
-        order = {path.name: i for i, path in enumerate(ranked)}
-        ref_generators = sorted(
-            ref_generators, key=lambda g: order.get(Path(g.font_path).name, 999)
-        )
-        first_wins = use_first_reference_font()
-    except Exception:
-        first_wins = True
-
-    # 预读各参考字体的覆盖字符集（原实现每个字都重读一次文件）
-    ref_covered = []
-    for _g in ref_generators:
-        _p = (
-            Path(font_processing_config.unihan_coverage_charset_dir)
-            / _g.font_name
-            / "covered.txt"
-        )
+        # （同一字符被多个参考字体覆盖时，优先级高的字体先写，后面的字体不再覆盖，
+        #   避免 jigmo2/3 这类生僻字体覆盖 jigmo.ttf 的常用简繁字形）。
+        # 设 HANZIGEN_REF_FONT_PRIORITY 可指定顺序；设 HANZIGEN_REF_FONT_MODE=last 恢复旧行为。
         try:
-            ref_covered.append(read_charset_from_file(_p) if _p.exists() else set())
+            from utils.font.font_utils import resolve_reference_fonts, use_first_reference_font
+
+            ranked = resolve_reference_fonts(reference_fonts_dir)
+            order = {path.name: i for i, path in enumerate(ranked)}
+            ref_generators = sorted(
+                ref_generators, key=lambda g: order.get(Path(g.font_path).name, 999)
+            )
+            first_wins = use_first_reference_font()
         except Exception:
-            ref_covered.append(set())
+            first_wins = True
 
-    for char in tqdm(charset, desc="Generating ground truth and reference images"):
-        tgt_generator.save_glyph_image(
-            char=char,
-            output_dir=tgt_output_dir,
-            img_size=font_processing_config.img_size,
-        )
+        # 预读各参考字体的覆盖字符集（原实现每个字都重读一次文件）
+        ref_covered = []
+        for _g in ref_generators:
+            _p = (
+                Path(font_processing_config.unihan_coverage_charset_dir)
+                / _g.font_name
+                / "covered.txt"
+            )
+            try:
+                ref_covered.append(read_charset_from_file(_p) if _p.exists() else set())
+            except Exception:
+                ref_covered.append(set())
 
-        for ref_generator, covered_charset in zip(ref_generators, ref_covered):
-            if char not in covered_charset:
-                continue
-            ref_generator.save_glyph_image(
+        for char in tqdm(charset, desc="Generating ground truth and reference images"):
+            tgt_generator.save_glyph_image(
                 char=char,
-                output_dir=ref_output_dir,
+                output_dir=tgt_output_dir,
                 img_size=font_processing_config.img_size,
             )
-            if first_wins:
-                break  # 先命中的参考字体优先，后面的字体不再覆盖
 
-    dataset = PairedGlyphImageDataset(tgt_output_dir, ref_output_dir)
-    loader = DataLoader(
-        dataset, batch_size=inference_config.batch_size, shuffle=False
-    )
-    self._generate_images_from_loader(
-        loader=loader,
-        config=inference_config,
-    )
+            for ref_generator, covered_charset in zip(ref_generators, ref_covered):
+                if char not in covered_charset:
+                    continue
+                ref_generator.save_glyph_image(
+                    char=char,
+                    output_dir=ref_output_dir,
+                    img_size=font_processing_config.img_size,
+                )
+                if first_wins:
+                    break  # 先命中的参考字体优先，后面的字体不再覆盖
+
+        dataset = PairedGlyphImageDataset(tgt_output_dir, ref_output_dir)
+        loader = DataLoader(
+            dataset, batch_size=inference_config.batch_size, shuffle=False
+        )
+        self._generate_images_from_loader(
+            loader=loader,
+            config=inference_config,
+        )
 
     # ===== Logging =====
     def _log_training_metrics(
